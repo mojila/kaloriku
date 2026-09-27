@@ -68,6 +68,17 @@ fun VoiceLogSheet(vm: MainViewModel, micDenied: Boolean = false, onDismiss: () -
             text = voiceState.partial
         }
     }
+    // The final transcript arrives in onResults, which fires *after* onEndOfSpeech has
+    // already cleared `listening`. It is the authoritative result of the session, so it
+    // is committed unconditionally: a blank result never sets finalText, and mirroring
+    // the watch here is what keeps a spoken meal from being silently dropped.
+    LaunchedEffect(voiceState.finalText) {
+        val final = voiceState.finalText
+        if (!final.isNullOrBlank()) {
+            text = final
+            controller.stop()
+        }
+    }
     DisposableEffect(Unit) {
         onDispose { controller.stop() }
     }

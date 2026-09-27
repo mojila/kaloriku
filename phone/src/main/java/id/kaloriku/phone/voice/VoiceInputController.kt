@@ -13,13 +13,26 @@ import java.util.Locale
 
 /**
  * Thin wrapper around Android's on-device [SpeechRecognizer] tuned for Indonesian.
- * The UI observes [state] and reads [partial] for live feedback.
+ *
+ * The UI observes [state]: [State.partial] drives live feedback while listening and
+ * [State.finalText] carries the terminal transcript, which arrives after
+ * `onEndOfSpeech` has already cleared `listening`. Both must be honoured or the last
+ * result is lost.
  */
 class VoiceInputController(private val context: Context) {
 
     data class State(
         val listening: Boolean = false,
         val partial: String = "",
+        /**
+         * The recognizer's final transcript, or null while none has arrived.
+         *
+         * Distinct from [partial] because `onEndOfSpeech` flips [listening] to false
+         * before `onResults` fires, so a consumer that mirrors partials only while
+         * listening would silently drop the last (and only authoritative) result.
+         * The UI keys off this field to commit the final text unconditionally.
+         */
+        val finalText: String? = null,
         val error: String? = null,
     )
 
@@ -90,7 +103,14 @@ class VoiceInputController(private val context: Context) {
                     ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     ?.firstOrNull()
                     .orEmpty()
-                _state.value = State(partial = text)
+                // Publish the final transcript alongside the partial so a consumer that
+                // stopped mirroring partials (listening is already false by now) still
+                // receives the result. A blank result must not raise finalText, so the
+                // UI cannot mistake "nothing heard" for a committed transcript.
+                _state.value = State(
+                    partial = text,
+                    finalText = text.takeIf { it.isNotBlank() },
+                )
                 if (text.isNotBlank()) onResult(text)
             }
 
@@ -135,7 +155,9 @@ class VoiceInputController(private val context: Context) {
         }
         recognizer = null
         session = null
-        _state.value = _state.value.copy(listening = false)
+        // Drop the terminal transcript along with the live flag; a stopped controller
+        // must not replay the previous result into a new sheet or a fresh session.
+        _state.value = _state.value.copy(listening = false, finalText = null)
     }
 
     companion object {

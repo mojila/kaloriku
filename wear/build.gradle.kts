@@ -72,7 +72,6 @@ dependencies {
     implementation(libs.wear.protolayout)
     implementation(libs.wear.protolayout.material3)
     implementation(libs.wear.tiles)
-    implementation(libs.horologist.compose.layout)
     implementation(libs.guava)
 
     implementation(libs.androidx.core.ktx)

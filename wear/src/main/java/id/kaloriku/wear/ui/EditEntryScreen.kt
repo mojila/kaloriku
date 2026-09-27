@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -65,6 +66,7 @@ fun EditEntryScreen(
     onCancel: () -> Unit,
 ) {
     val busy by vm.editBusy.collectAsStateWithLifecycle()
+    val vmError by vm.errorMessage.collectAsStateWithLifecycle()
     val listState = rememberScalingLazyListState()
     val scope = rememberCoroutineScope()
 
@@ -79,9 +81,20 @@ fun EditEntryScreen(
     var hour by rememberSaveable(entry.id) { mutableIntStateOf(JakartaTime.hourOfDay(entry.loggedAt)) }
     var minute by rememberSaveable(entry.id) { mutableIntStateOf(JakartaTime.minuteOfHour(entry.loggedAt)) }
     // Live estimate shown while editing; only changes after a save re-estimates it.
-    var shownKcal by remember(entry.id) { mutableStateOf(entry.kcal) }
+    var shownKcal by remember(entry.id) { mutableIntStateOf(entry.kcal) }
     var shownRange by remember(entry.id) { mutableStateOf(entry.kcalRangeText) }
     var error by remember(entry.id) { mutableStateOf<String?>(null) }
+
+    // A save failure raised by the view model (the repository threw) has to reach the
+    // screen too, not only the local "entry is gone" case below. This screen is where
+    // the save happens, so it shows the message; it is cleared once shown so a later
+    // screen does not repeat it.
+    LaunchedEffect(vmError) {
+        vmError?.let {
+            error = it
+            vm.clearError()
+        }
+    }
 
     // True only when the user actually moved the entry, used for the hint line and to
     // decide whether the repository needs a new timestamp at all.

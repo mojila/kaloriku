@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive launcher icon. Lives in `mipmap-anydpi` rather than `mipmap-anydpi-v26`
+  because minSdk is 30, so a version-qualified folder is redundant (lint ObsoleteSdkInt).
+  The `<monochrome>` layer is the themed-icon source on API 33+; Wear OS falls back to
+  the normal foreground where it is not supported.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

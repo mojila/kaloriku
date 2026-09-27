@@ -23,8 +23,9 @@ exactly what destroys the data.
 ## Committed dev signing key
 
 `keystore/kaloriku-dev.jks` (alias/passwords in `gradle.properties` under
-`kaloriku.dev.*`) signs the `debug` build type for both `:phone` and `:wear` via
-`gradle/dev-signing.gradle.kts`.
+`kaloriku.dev.*`) signs the `debug` build type for both `:phone` and `:wear`. Each
+module declares the same `signingConfigs { create("dev") }` block in its own
+`build.gradle.kts`, so the two APKs always share one certificate.
 
 Two things this guarantees:
 

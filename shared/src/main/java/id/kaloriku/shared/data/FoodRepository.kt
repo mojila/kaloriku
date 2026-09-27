@@ -89,9 +89,6 @@ class FoodRepository(
     fun observeDayTotal(dayKey: String = JakartaTime.todayKey()): Flow<Int> =
         dao.observeDayTotal(dayKey)
 
-    fun observeBetween(startMillis: Long, endMillis: Long): Flow<List<FoodEntry>> =
-        dao.observeBetween(startMillis, endMillis).map { list -> list.map { it.toDomain() } }
-
     suspend fun recent(limit: Int = 20): List<FoodEntry> =
         dao.observeRecent(limit).first().map { it.toDomain() }
 

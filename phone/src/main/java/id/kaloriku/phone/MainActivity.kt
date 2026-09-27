@@ -22,7 +22,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             KaloriKuTheme {
                 val vm: MainViewModel = viewModel()
-                var tab by rememberSaveable { mutableStateOf(0) }
+                var tab by rememberSaveable { mutableIntStateOf(0) }
                 // Reports whether RECORD_AUDIO is granted right now and kicks off the
                 // system dialog when it is not. The voice sheet must never claim to be
                 // listening when the permission was denied.

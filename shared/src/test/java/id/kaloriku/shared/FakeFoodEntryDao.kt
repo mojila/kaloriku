@@ -29,10 +29,6 @@ class FakeFoodEntryDao : FoodEntryDao {
 
     override suspend fun insert(entry: FoodEntryEntity): Long = insertInternal(entry)
 
-    override suspend fun insertAll(entries: List<FoodEntryEntity>) {
-        entries.forEach { insertInternal(it) }
-    }
-
     override suspend fun update(entry: FoodEntryEntity) {
         rows.value = rows.value.map { if (it.id == entry.id) entry else it }
     }
@@ -68,14 +64,6 @@ class FakeFoodEntryDao : FoodEntryDao {
 
     override suspend fun entriesForDay(dayKey: String): List<FoodEntryEntity> =
         rows.value.filter { it.dayKey == dayKey && !it.deleted }.sortedByDescending { it.loggedAt }
-
-    override suspend fun entriesBetween(start: Long, end: Long): List<FoodEntryEntity> =
-        rows.value.filter { it.loggedAt in start..end && !it.deleted }.sortedByDescending { it.loggedAt }
-
-    override fun observeBetween(start: Long, end: Long): Flow<List<FoodEntryEntity>> =
-        rows.map { list ->
-            list.filter { it.loggedAt in start..end && !it.deleted }.sortedByDescending { it.loggedAt }
-        }
 
     override fun observeDayTotal(dayKey: String): Flow<Int> =
         rows.map { list -> list.filter { it.dayKey == dayKey && !it.deleted }.sumOf { it.kcal } }

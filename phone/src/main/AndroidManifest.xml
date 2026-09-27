@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -12,12 +13,17 @@
         </intent>
     </queries>
 
+    <!-- `hasFragileUserData` is API 29+, but it is a forward-looking declaration: on
+         older devices it is ignored and the attribute is simply not read, so it must
+         stay on the manifest. Lint flags it as unused for minSdk 26; that is the
+         intended behaviour, not a defect. -->
     <application
         android:name=".PhoneApp"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:hasFragileUserData="true"
+        tools:ignore="UnusedAttribute"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -27,7 +33,6 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="@string/app_name"
             android:theme="@style/Theme.KaloriKu">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

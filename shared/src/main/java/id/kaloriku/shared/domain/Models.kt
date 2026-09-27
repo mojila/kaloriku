@@ -44,7 +44,6 @@ data class AnalyzedItem(
     val kcalHigh: Int = 0,
     val confidence: Double = 0.0,
     val isLocal: Boolean = false,
-    val matchProbability: Double = 0.0,
     val needsClarification: Boolean = false,
     /**
      * Dominant macro profile of this item, decided by Jev (never by heuristics).

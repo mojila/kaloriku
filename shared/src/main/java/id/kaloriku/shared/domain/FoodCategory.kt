@@ -92,7 +92,4 @@ object CalorieRubric {
         val highBound = ranges[(lo + 1).coerceAtMost(last)].last
         return Triple(point.coerceAtLeast(0), lowBound, highBound)
     }
-
-    /** Rough kcal for a known food name from the local catalog, if present. */
-    fun estimateFromCatalog(food: LocalFood): Int = food.kcalPerPortion
 }

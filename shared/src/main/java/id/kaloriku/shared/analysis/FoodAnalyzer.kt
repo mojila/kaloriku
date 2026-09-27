@@ -62,13 +62,13 @@ class FoodAnalyzer(
     ): AnalysisResult = withContext(Dispatchers.Default) {
         val cleaned = transcript.trim()
         if (cleaned.isEmpty()) {
-            return@withContext emptyResult("")
+            return@withContext emptyResult("", nowMillis = nowMillis)
         }
 
-        val extraction = runCatching { extract(cleaned) }.getOrElse { fallbackExtraction(cleaned) }
+        val extraction = runCatching { extract(cleaned, nowMillis) }.getOrElse { fallbackExtraction(cleaned, nowMillis) }
         val items = extraction.items.take(maxItems)
         if (items.isEmpty()) {
-            return@withContext emptyResult(cleaned, extraction.normalized)
+            return@withContext emptyResult(cleaned, extraction.normalized, nowMillis)
         }
 
         var resolved = items.map { item ->
@@ -82,7 +82,7 @@ class FoodAnalyzer(
         var jev = runCatching { api.jev(buildState(cleaned, extraction, resolved, nowMillis), questions) }
             .getOrElse {
                 degraded = true
-                fallbackJev(resolved, extraction.mealHint)
+                fallbackJev(resolved, extraction.mealHint, nowMillis)
             }
 
         // Ground the items the catalog and Jev could not place with web evidence, then
@@ -171,7 +171,7 @@ class FoodAnalyzer(
             api.jev(buildState(cleaned, extraction, listOf(resolved), nowMillis), firstQuestions)
         }.getOrElse {
             degraded = true
-            fallbackJev(listOf(resolved), meal)
+            fallbackJev(listOf(resolved), meal, nowMillis)
         }
 
         // A rename can introduce a branded food the catalog does not know, so the
@@ -207,7 +207,7 @@ class FoodAnalyzer(
         val mealHint: MealType?,
     )
 
-    private suspend fun extract(text: String): Extraction {
+    private suspend fun extract(text: String, nowMillis: Long): Extraction {
         val raw = api.chat(Prompts.EXTRACTION, text, jsonMode = true)
         val json = parseJsonObject(raw)
         val normalized = json.optString("ringkasan").takeIf { it.isNotBlank() } ?: text
@@ -221,18 +221,35 @@ class FoodAnalyzer(
                     ExtractedItem(
                         name = name,
                         portion = o.optString("porsi").trim(),
-                        grams = if (o.has("gram") && !o.isNull("gram")) o.optDouble("gram") else null,
+                        grams = parseGrams(o),
                     ),
                 )
             }
         }
         val mealHint = json.optString("waktu").takeIf { it.isNotBlank() }?.let(::mealFromKey)
-        if (items.isEmpty()) return fallbackExtraction(text)
+        if (items.isEmpty()) return fallbackExtraction(text, nowMillis)
         return Extraction(normalized, items, mealHint)
     }
 
+    /**
+     * Reads an item's optional weight in grams.
+     *
+     * `optDouble` answers `NaN` for a value that is not a number — which is exactly what
+     * a model returns for "gram": "sekitar 100" — and `JSONObject.put` later throws
+     * `JSONException: JSON does not allow non-finite numbers` on a non-finite Double.
+     * That would break the sync push and the backup export for an entry the user can
+     * see, so a non-finite weight is treated as "not stated" instead of being carried
+     * into the persisted model. A negative weight is equally meaningless and is dropped
+     * for the same reason.
+     */
+    private fun parseGrams(item: JSONObject): Double? {
+        if (!item.has("gram") || item.isNull("gram")) return null
+        val grams = item.optDouble("gram")
+        return grams.takeIf { it.isFinite() && it > 0.0 }
+    }
+
     /** No-LLM fallback: split on common Indonesian connectors and match the catalog. */
-    private fun fallbackExtraction(text: String): Extraction {
+    private fun fallbackExtraction(text: String, nowMillis: Long): Extraction {
         val lower = text.lowercase()
         val hits = catalogSearch(lower)
         val items = if (hits.isNotEmpty()) {
@@ -246,7 +263,7 @@ class FoodAnalyzer(
                 .take(maxItems)
                 .map { ExtractedItem(it, "", null) }
         }
-        return Extraction(text, items, mealFromHour(JakartaTime.hourOfDay(System.currentTimeMillis())))
+        return Extraction(text, items, mealFromHour(JakartaTime.hourOfDay(nowMillis)))
     }
 
     // ------------------------------------------------------------------ Jev call
@@ -594,14 +611,18 @@ class FoodAnalyzer(
         }
     }
 
-    private fun fallbackJev(items: List<ResolvedItem>, mealHint: MealType?): JevResponse {
+    private fun fallbackJev(
+        items: List<ResolvedItem>,
+        mealHint: MealType?,
+        nowMillis: Long,
+    ): JevResponse {
         val answers = buildMap<String, JevAnswer> {
             put("health", JevAnswer(type = "score", score = 3.0))
             put(
                 "meal",
                 JevAnswer(
                     type = "choice",
-                    choice = (mealHint ?: mealFromHour(JakartaTime.hourOfDay(System.currentTimeMillis()))).name,
+                    choice = (mealHint ?: mealFromHour(JakartaTime.hourOfDay(nowMillis))).name,
                     confidence = 0.5,
                 ),
             )
@@ -686,7 +707,6 @@ class FoodAnalyzer(
             kcalHigh = scaledHigh,
             confidence = kcalAnswer?.confidence ?: 0.5,
             isLocal = localAnswer?.noulYes ?: (resolved.match != null),
-            matchProbability = localAnswer?.noul ?: 0.0,
             needsClarification = clearAnswer?.noul?.let { it < 0.35 } ?: false,
             webGrounded = resolved.evidence != null,
             macroProfile = macroAnswer?.choice?.takeIf { it in MACRO_PROFILES } ?: "tidak_jelas",
@@ -712,11 +732,15 @@ class FoodAnalyzer(
         return existing.take(8).getOrNull(index)?.id
     }
 
-    private fun emptyResult(transcript: String, normalized: String = transcript) = AnalysisResult(
+    private fun emptyResult(
+        transcript: String,
+        normalized: String = transcript,
+        nowMillis: Long,
+    ) = AnalysisResult(
         transcript = transcript,
         normalized = normalized,
         items = emptyList(),
-        meal = mealFromHour(JakartaTime.hourOfDay(System.currentTimeMillis())),
+        meal = mealFromHour(JakartaTime.hourOfDay(nowMillis)),
         healthScore = 0.0,
         needsClarification = true,
         totalKcal = 0,

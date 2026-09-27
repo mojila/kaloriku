@@ -60,6 +60,18 @@ class WearViewModel(app: Application) : AndroidViewModel(app) {
     private val _deleteBusy = MutableStateFlow(false)
     val deleteBusy: StateFlow<Boolean> = _deleteBusy.asStateFlow()
 
+    /**
+     * The most recent edit/delete failure, so the screens can tell the user instead of
+     * swallowing the error. Wear has no Material3 snackbar, so the screens render this
+     * as an inline error line; it is cleared by [clearError] once acknowledged.
+     */
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+
+    fun clearError() {
+        _errorMessage.value = null
+    }
+
     init {
         // Sync automatically when the app starts.
         viewModelScope.launch {
@@ -170,6 +182,9 @@ class WearViewModel(app: Application) : AndroidViewModel(app) {
         if (trimmedName.isEmpty()) return null
         val trimmedPortion = portionText.trim()
         _editBusy.value = true
+        // Report the first message of a new attempt, so a stale failure cannot be shown
+        // while this one is still running.
+        _errorMessage.value = null
         return try {
             val current = container.repository.find(id) ?: return null
             val nameOrPortionChanged =
@@ -217,6 +232,7 @@ class WearViewModel(app: Application) : AndroidViewModel(app) {
             // Room flow to catch up before showing the new numbers.
             container.repository.find(id)
         } catch (e: Exception) {
+            _errorMessage.value = e.userFacingMessage("Gagal menyimpan perubahan.")
             null
         } finally {
             _editBusy.value = false
@@ -226,15 +242,31 @@ class WearViewModel(app: Application) : AndroidViewModel(app) {
     /** Deletes an entry and pushes the deletion to the phone. */
     suspend fun deleteEntry(id: Long) {
         _deleteBusy.value = true
+        _errorMessage.value = null
         try {
             container.repository.delete(id)
             requestCalorieTileUpdate(getApplication())
             container.sync.sync()
         } catch (e: Exception) {
             // Nothing to recover locally; the row and its tombstone stay as they are.
+            // The user still has to be told the delete did not land.
+            _errorMessage.value = e.userFacingMessage("Gagal menghapus catatan.")
         } finally {
             _deleteBusy.value = false
         }
+    }
+
+    /**
+     * A failure message that is short enough to read on a round watch face.
+     *
+     * An exception message is often a hundred-character SQLite string that is useless
+     * to the user, so only a short one is surfaced; anything longer falls back to the
+     * generic Indonesian [fallback]. This keeps a genuinely informative short reason
+     * (e.g. "record not found") visible without ever dumping a stack trace on screen.
+     */
+    private fun Exception.userFacingMessage(fallback: String): String {
+        val reason = message?.trim()
+        return if (reason.isNullOrEmpty() || reason.length > MAX_ERROR_LENGTH) fallback else reason
     }
 
     /** Adapts a persisted entry back into the shape [FoodAnalyzer.reestimate] expects. */
@@ -252,4 +284,9 @@ class WearViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     fun todayLabel(): String = JakartaTime.label(JakartaTime.todayKey())
+
+    private companion object {
+        /** Longest exception message that still fits a readable line on a round watch. */
+        const val MAX_ERROR_LENGTH = 60
+    }
 }

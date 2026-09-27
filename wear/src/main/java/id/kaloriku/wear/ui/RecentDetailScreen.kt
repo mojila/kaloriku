@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,7 +60,20 @@ fun RecentDetailScreen(
     val listState = rememberScalingLazyListState()
     val scope = rememberCoroutineScope()
     val deleting by vm.deleteBusy.collectAsStateWithLifecycle()
+    val vmError by vm.errorMessage.collectAsStateWithLifecycle()
     var confirmingDelete by remember(entry.id) { mutableStateOf(false) }
+
+    // A failed delete must be reported: the previous behaviour popped home as if the
+    // row were gone. The message stays on screen (the delete confirm is dismissed) so
+    // the user can retry; the view-model copy is cleared once it has been shown here.
+    var error by remember(entry.id) { mutableStateOf<String?>(null) }
+    LaunchedEffect(vmError) {
+        vmError?.let {
+            error = it
+            confirmingDelete = false
+            vm.clearError()
+        }
+    }
 
     val todayKey = JakartaTime.todayKey()
     val isToday = entry.dayKey == todayKey
@@ -174,8 +188,12 @@ fun RecentDetailScreen(
                             Button(
                                 onClick = {
                                     scope.launch {
+                                        error = null
                                         vm.deleteEntry(entry.id)
-                                        onClose()
+                                        // Only leave the screen when the row really went
+                                        // away; on failure the error line above stays
+                                        // visible so the delete can be retried.
+                                        if (vm.errorMessage.value == null) onClose()
                                     }
                                 },
                                 enabled = !deleting,
@@ -217,6 +235,18 @@ fun RecentDetailScreen(
             item {
                 Button(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
                     Text("Kembali")
+                }
+            }
+
+            error?.let { message ->
+                item {
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                    )
                 }
             }
 

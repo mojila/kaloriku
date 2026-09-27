@@ -123,13 +123,23 @@ class KenariClient(
             }.getOrElse { emptyList() }
         }
 
+    /**
+     * A model can answer a numeric field with a string ("tinggi") or an out-of-range
+     * sentinel, and `optDouble` turns the former into `NaN`. `NaN` compares false
+     * against every threshold, so it would silently read as a confident "no" and — worse
+     * — reach the domain, where the backup/sync encoder cannot represent it. Normalising
+     * to `null` here keeps "the model gave no usable number" distinct from a real 0.0.
+     */
+    private fun JSONObject.optFiniteDouble(name: String): Double? =
+        optDouble(name).takeIf { it.isFinite() }
+
     private fun parseAnswer(a: JSONObject): JevAnswer {
         val probabilities = a.optJSONObject("probabilities")?.let { probs ->
             buildMap {
                 val keys = probs.keys()
                 while (keys.hasNext()) {
                     val k = keys.next()
-                    put(k, probs.optDouble(k, 0.0))
+                    put(k, probs.optFiniteDouble(k) ?: 0.0)
                 }
             }
         } ?: emptyMap()
@@ -144,10 +154,10 @@ class KenariClient(
         } ?: emptyMap()
         return JevAnswer(
             type = a.optString("type"),
-            noul = if (a.has("noul")) a.optDouble("noul") else null,
+            noul = if (a.has("noul")) a.optFiniteDouble("noul") else null,
             choice = if (a.has("choice") && !a.isNull("choice")) a.optString("choice") else null,
-            confidence = if (a.has("confidence")) a.optDouble("confidence") else null,
-            score = if (a.has("score")) a.optDouble("score") else null,
+            confidence = if (a.has("confidence")) a.optFiniteDouble("confidence") else null,
+            score = if (a.has("score")) a.optFiniteDouble("score") else null,
             probabilities = probabilities,
             legend = legend,
         )

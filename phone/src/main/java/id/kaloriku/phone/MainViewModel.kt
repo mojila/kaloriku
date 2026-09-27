@@ -57,7 +57,6 @@ data class DashboardUi(
     val todayTotal: Int = 0,
     val target: Int = 2000,
     val todayEntries: List<FoodEntry> = emptyList(),
-    val recent: List<FoodEntry> = emptyList(),
 ) {
     val remaining: Int get() = (target - todayTotal).coerceAtLeast(0)
     val progress: Float get() = if (target <= 0) 0f else (todayTotal.toFloat() / target).coerceIn(0f, 1f)
@@ -172,14 +171,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val dashboard: StateFlow<DashboardUi> = combine(
         container.repository.observeDayTotal(),
         container.repository.observeDay(),
-        container.repository.observeRecent(15),
         settings,
-    ) { total, day, recent, prefs ->
+    ) { total, day, prefs ->
         DashboardUi(
             todayTotal = total,
             target = prefs.dailyTargetKcal,
             todayEntries = day,
-            recent = recent,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DashboardUi())
 

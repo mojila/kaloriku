@@ -21,9 +21,6 @@ interface FoodEntryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entry: FoodEntryEntity): Long
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAll(entries: List<FoodEntryEntity>)
-
     @Update
     suspend fun update(entry: FoodEntryEntity)
 
@@ -60,12 +57,6 @@ interface FoodEntryDao {
 
     @Query("SELECT * FROM food_entries WHERE deleted = 0 AND dayKey = :dayKey ORDER BY loggedAt DESC")
     suspend fun entriesForDay(dayKey: String): List<FoodEntryEntity>
-
-    @Query("SELECT * FROM food_entries WHERE deleted = 0 AND loggedAt BETWEEN :start AND :end ORDER BY loggedAt DESC")
-    suspend fun entriesBetween(start: Long, end: Long): List<FoodEntryEntity>
-
-    @Query("SELECT * FROM food_entries WHERE deleted = 0 AND loggedAt BETWEEN :start AND :end ORDER BY loggedAt DESC")
-    fun observeBetween(start: Long, end: Long): Flow<List<FoodEntryEntity>>
 
     @Query("SELECT COALESCE(SUM(kcal), 0) FROM food_entries WHERE deleted = 0 AND dayKey = :dayKey")
     fun observeDayTotal(dayKey: String): Flow<Int>

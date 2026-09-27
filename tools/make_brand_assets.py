@@ -3,10 +3,12 @@
 Run from the repo root:  python3 tools/make_brand_assets.py
 
 Outputs (per density bucket):
-  phone|wear/src/main/res/mipmap-*/ic_launcher_foreground.png   adaptive foreground
-  phone/src/main/res/mipmap-*/ic_launcher.png                   legacy square icon
-  phone/src/main/res/mipmap-*/ic_launcher_round.png             legacy round icon
-  phone|wear/src/main/res/drawable-*/ic_logo.png                in-app logo
+  phone|wear/src/main/res/drawable-*/ic_launcher_foreground.png  adaptive foreground
+  phone|wear/src/main/res/drawable-*/ic_logo.png                 in-app logo
+
+The adaptive-icon XMLs live in `mipmap-anydpi/` and are hand-maintained. There are no
+legacy `mipmap-*/ic_launcher*.png` bitmaps: both apps have a minSdk (26 and 30) at which
+adaptive icons are always available, so those bitmaps would be unreachable.
 
 Previews are written to tools/preview/ for visual inspection.
 """
@@ -65,7 +67,27 @@ def art_on_canvas(art, canvas_px, art_fraction, opaque_bg=None, circle=False):
         dst = ((off + y) * canvas_px + off) * 4
         src = y * target * 4
         row = scaled[src:src + target * 4]
-        out[dst:dst + target * 4] = row
+        if opaque_bg is None:
+            out[dst:dst + target * 4] = row
+        else:
+            # Alpha-composite the art over the opaque backdrop. A raw copy here would
+            # punch the art's transparent pixels straight through the background,
+            # leaving transparent notches inside the icon (and holes across the disc),
+            # which is exactly what the launcher's round-icon check rejects.
+            for x in range(target):
+                s = x * 4
+                a = row[s + 3] / 255.0
+                if a <= 0.0:
+                    continue  # keep the backdrop
+                d = dst + s
+                if a >= 1.0:
+                    out[d] = row[s]
+                    out[d + 1] = row[s + 1]
+                    out[d + 2] = row[s + 2]
+                else:
+                    out[d] = int(round(row[s] * a + out[d] * (1 - a)))
+                    out[d + 1] = int(round(row[s + 1] * a + out[d + 1] * (1 - a)))
+                    out[d + 2] = int(round(row[s + 2] * a + out[d + 2] * (1 - a)))
 
     if circle:
         cx = cy = (canvas_px - 1) / 2.0
@@ -146,21 +168,13 @@ def main():
             )
 
     # ------------------------------------------------------- legacy phone icons
-    # Pre-API-26 launchers need a full-bleed bitmap: art on an opaque background.
-    for bucket, scale in DENSITIES.items():
-        size = int(round(48 * scale))
-        w, h, px = art_on_canvas(art, size, 0.80, opaque_bg=BACKGROUND)
-        write(
-            os.path.join(ROOT, "phone", "src/main/res", f"mipmap-{bucket}", "ic_launcher.png"),
-            w, h, px,
-        )
-        w, h, px = art_on_canvas(art, size, 0.68, opaque_bg=BACKGROUND, circle=True)
-        write(
-            os.path.join(ROOT, "phone", "src/main/res", f"mipmap-{bucket}",
-                         "ic_launcher_round.png"),
-            w, h, px,
-        )
-
+    # Intentionally none. `:phone` has minSdk 26, and adaptive icons (and therefore
+    # `mipmap-anydpi/ic_launcher.xml`) exist on every API the app can install on, so a
+    # pre-API-26 full-bleed bitmap can never be selected. Shipping one anyway is not
+    # merely dead weight: a density-qualified `ic_launcher.png` sitting next to the
+    # density-independent XML is exactly the ambiguous pairing lint reports as
+    # IconXmlAndPng, and a full-bleed square always trips IconLauncherShape. If minSdk
+    # ever drops below 26, restore this block.
     # ------------------------------------------------------------------ logo
     # The in-app logo is shown on the app's own surface, so it keeps its alpha and
     # fills the canvas more generously than the masked launcher icon.
@@ -182,8 +196,6 @@ def main():
         ("adaptive_circle", FOREGROUND_FRACTION, "circle"),
         ("adaptive_squircle", FOREGROUND_FRACTION, "squircle"),
         ("adaptive_rounded", FOREGROUND_FRACTION, "rounded"),
-        ("legacy_square", 0.80, None),
-        ("legacy_round", 0.68, "circle"),
     ):
         w, h, px = art_on_canvas(art, size, fraction, opaque_bg=BACKGROUND)
         if mask:

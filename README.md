@@ -92,7 +92,7 @@ KENARI_API_KEY="$KENARI_API_KEY" ./gradlew :shared:testDebugUnitTest \
 
 ## Fokus makanan lokal
 
-`LocalFoodCatalog` memuat ratusan makanan Indonesia (nasi goreng, rendang, soto ayam,
+`LocalFoodCatalog` memuat sekitar 90 makanan Indonesia (nasi goreng, rendang, soto ayam,
 gado-gado, tempe, kerupuk, es cendol, dan lainnya) dengan kalori per porsi, alias,
 dan makronutrien. Katalog dipakai untuk pencocokan cepat dan sebagai landasan
 kategori bagi pertanyaan Jev.
@@ -139,7 +139,7 @@ Diverifikasi di perangkat nyata: **Xiaomi Watch 2 (Wear OS 5, API 34)** dan
 **Samsung Galaxy S22 (Android 16, API 36)**.
 
 - `:shared`, `:phone`, `:wear` kompilasi bersih (0 warning) dan menghasilkan APK.
-- 130 unit test lulus (rubrik kalori, analisa, grounding web, katalog, waktu, sync,
+- 235 unit test lulus (rubrik kalori, analisa, grounding web, katalog, waktu, sync,
   wawasan, migrasi skema).
 - Alur uji langsung di perangkat:
   - HP: "sarapan bubur ayam satu mangkuk sama kerupuk, minum kopi susu"
