@@ -14,3 +14,5 @@ local.properties
 *.apk
 *.aab
 __pycache__
+# Local-only backups pulled with tools/dev-data.ps1 before a clean-install test.
+/.data-backup

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  API 30 and below equivalent of data_extraction_rules.xml. Kept in sync with it:
+  the Room database and the DataStore preferences are the only state worth keeping.
+-->
+<full-backup-content>
+    <include domain="database" path="." />
+    <include domain="file" path="datastore/" />
+</full-backup-content>

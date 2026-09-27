@@ -6,6 +6,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import id.kaloriku.shared.BuildConfig
 
 @Database(entities = [FoodEntryEntity::class], version = 4, exportSchema = true)
 abstract class KaloriKuDatabase : RoomDatabase() {
@@ -66,16 +67,27 @@ abstract class KaloriKuDatabase : RoomDatabase() {
             }
         }
 
-        fun get(context: Context): KaloriKuDatabase =
+        fun get(
+            context: Context,
+            // Only debug builds may fall back to dropping tables. In a release
+            // build a missing migration must fail loudly instead of silently
+            // destroying the user's log, which would otherwise look exactly like
+            // the data loss caused by an uninstall.
+            allowDestructiveFallback: Boolean = BuildConfig.DEBUG,
+        ): KaloriKuDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     KaloriKuDatabase::class.java,
                     "kaloriku.db",
                 ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
-                    // Last-resort safety net only: every released schema version has a
-                    // real migration above, so this must never fire in practice.
-                    .fallbackToDestructiveMigration(dropAllTables = true)
+                    .apply {
+                        // Last-resort safety net only: every released schema version
+                        // has a real migration above, so this must never fire.
+                        if (allowDestructiveFallback) {
+                            fallbackToDestructiveMigration(dropAllTables = true)
+                        }
+                    }
                     .build()
                     .also { instance = it }
             }

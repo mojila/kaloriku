@@ -17,6 +17,29 @@ android {
         versionName = "1.0"
     }
 
+    // Same committed dev key as :phone. Identical signing certificate is required
+    // for the DataLayer, and a stable one keeps `adb install -r` from forcing an
+    // uninstall (which would delete /data/data). Dev key only.
+    signingConfigs {
+        create("dev") {
+            val keystoreFile = rootProject.file(project.property("kaloriku.dev.keystore") as String)
+            require(keystoreFile.isFile) {
+                "Dev keystore not found at ${keystoreFile.path}. " +
+                    "It is committed in the repo; restore it or regenerate with keytool."
+            }
+            storeFile = keystoreFile
+            storePassword = project.property("kaloriku.dev.keystore.password") as String
+            keyAlias = project.property("kaloriku.dev.key.alias") as String
+            keyPassword = project.property("kaloriku.dev.key.password") as String
+        }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("dev")
+        }
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true

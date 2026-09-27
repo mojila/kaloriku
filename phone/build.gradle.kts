@@ -17,6 +17,31 @@ android {
         versionName = "1.0"
     }
 
+    // Debug builds are signed with the committed dev key (see gradle.properties)
+    // so the certificate stays stable across machines and clean checkouts. A
+    // changing certificate makes `adb install -r` fail and tempts an uninstall,
+    // which deletes /data/data and the food log with it.
+    // Dev key only -- a Play release needs a real key from CI secrets.
+    signingConfigs {
+        create("dev") {
+            val keystoreFile = rootProject.file(project.property("kaloriku.dev.keystore") as String)
+            require(keystoreFile.isFile) {
+                "Dev keystore not found at ${keystoreFile.path}. " +
+                    "It is committed in the repo; restore it or regenerate with keytool."
+            }
+            storeFile = keystoreFile
+            storePassword = project.property("kaloriku.dev.keystore.password") as String
+            keyAlias = project.property("kaloriku.dev.key.alias") as String
+            keyPassword = project.property("kaloriku.dev.key.password") as String
+        }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("dev")
+        }
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true
