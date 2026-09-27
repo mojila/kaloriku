@@ -47,6 +47,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.navigation.compose)
+    // Raises the fragment version that the Wearable/Play-services transitives pin to
+    // (<1.3.0), which otherwise trips InvalidFragmentVersionForActivityResult.
+    implementation(libs.androidx.fragment.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.play.services.wearable)

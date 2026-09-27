@@ -37,9 +37,6 @@ class VoiceInputController(private val context: Context) {
 
     val isAvailable: Boolean get() = SpeechRecognizer.isRecognitionAvailable(context)
 
-    /** True while a session is running, so callers can make [start] idempotent. */
-    val isListening: Boolean get() = _state.value.listening && recognizer != null
-
     fun start(onResult: (String) -> Unit) {
         // A second tap while listening must not create a parallel recognizer that
         // also writes to the same state flow.
@@ -48,8 +45,9 @@ class VoiceInputController(private val context: Context) {
             _state.value = State(error = "Pengenalan suara tidak tersedia di perangkat ini.")
             return
         }
-        // Drop anything left over from a previous session before starting a new one.
-        stop()
+        // Clear any leftover "listening" flag from a session that ended without a
+        // matching callback before starting fresh.
+        _state.value = State()
 
         val token = Any()
         val sr = SpeechRecognizer.createSpeechRecognizer(context)
@@ -126,13 +124,15 @@ class VoiceInputController(private val context: Context) {
     }
 
     fun stop() {
-        val sr = recognizer ?: return
-        // Detach the listener first so no callback from the dying recognizer can
-        // land after its session token has been retired.
-        runCatching { sr.setRecognitionListener(null) }
-        runCatching { sr.stopListening() }
-        runCatching { sr.cancel() }
-        runCatching { sr.destroy() }
+        val sr = recognizer
+        if (sr != null) {
+            // Detach the listener first so no callback from the dying recognizer can
+            // land after its session token has been retired.
+            runCatching { sr.setRecognitionListener(null) }
+            runCatching { sr.stopListening() }
+            runCatching { sr.cancel() }
+            runCatching { sr.destroy() }
+        }
         recognizer = null
         session = null
         _state.value = _state.value.copy(listening = false)

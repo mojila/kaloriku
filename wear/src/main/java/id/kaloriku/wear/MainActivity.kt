@@ -117,10 +117,11 @@ private fun WearNav(
     // The mic permission is requested when the user opens the voice screen, but the
     // result may be a denial. The voice route reads this to decide whether it may
     // auto-launch speech; on denial the typed fallback is shown instead.
+    val context = LocalContext.current
     var micGranted by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
-                LocalContext.current,
+                context,
                 Manifest.permission.RECORD_AUDIO,
             ) == PackageManager.PERMISSION_GRANTED,
         )
@@ -137,7 +138,14 @@ private fun WearNav(
                 HomeScreen(
                     vm = vm,
                     onLogVoice = {
-                        onRequestMic()
+                        // Ask only when the mic is not already granted. The voice screen
+                        // reads the live state and either auto-launches speech or shows
+                        // the typed fallback, so a denial is never a dead end.
+                        val granted = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.RECORD_AUDIO,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (!granted) onRequestMic()
                         navController.navigate(ROUTE_VOICE)
                     },
                     onSelect = { entry -> navController.navigate(entryRoute("detail", entry.id)) },
@@ -147,7 +155,7 @@ private fun WearNav(
                 VoiceLogScreen(
                     vm = vm,
                     micGranted = micGranted,
-                    onMicResult = { granted -> micGranted = granted },
+                    onRequestMic = onRequestMic,
                     onClose = { navController.popBackStack() },
                 )
             }
@@ -216,7 +224,10 @@ private fun resolveEntry(
     // Fast path: always up to date, and refreshes the screen after an edit.
     recent.firstOrNull { it.id == entryId }?.let { return EntryLookup.Found(it) }
 
-    val byId by produceState<EntryLookup>(EntryLookup.Loading, entryId) {
+    // Only re-read once the fast path misses. Keying on the recent list as well means a
+    // delete on the phone (which drops the row and changes the list) re-runs the read,
+    // so the screen still pops home when the entry truly goes away.
+    val byId by produceState<EntryLookup>(EntryLookup.Loading, entryId, recent) {
         value = if (entryId < 0L) {
             EntryLookup.Missing
         } else {

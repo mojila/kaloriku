@@ -1,7 +1,5 @@
 package id.kaloriku.wear.ui
 
-import android.Manifest
-import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -24,7 +22,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.items
@@ -50,15 +47,14 @@ import id.kaloriku.wear.voice.WearVoiceInput
  * @param micGranted whether `RECORD_AUDIO` is currently granted. Speech is only
  *   auto-launched when it is; otherwise the typed fallback is shown immediately,
  *   since the platform speech activity would just fail or silently deny.
- * @param onMicResult receives a fresh permission result. The screen requests the
- *   permission itself when it can still prompt, so a grant re-enables voice here
- *   without the user having to leave and re-enter.
+ * @param onRequestMic asks the activity to show the system mic permission prompt;
+ *   its result comes back through [micGranted].
  */
 @Composable
 fun VoiceLogScreen(
     vm: WearViewModel,
     micGranted: Boolean,
-    onMicResult: (Boolean) -> Unit,
+    onRequestMic: () -> Unit,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -69,24 +65,15 @@ fun VoiceLogScreen(
     val listState = rememberScalingLazyListState()
     var text by rememberSaveable { mutableStateOf("") }
 
-    // Live permission state: starts from the host's value, but the screen owns the
-    // request so a grant made here takes effect immediately. Survives config change.
-    var micAllowed by rememberSaveable { mutableStateOf(micGranted) }
-    var permissionAsked by rememberSaveable { mutableStateOf(false) }
+    // Tracks whether speech has been started for this screen instance, so a grant
+    // reported by the host later (or a config change) does not double-launch.
+    var speechStarted by rememberSaveable { mutableStateOf(false) }
 
     // Owns the platform speech activity result and feeds it back into WearVoiceInput.
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
         voice.onActivityResult(result.resultCode, result.data)
-    }
-
-    // Owns the mic permission request so the voice route can recover from a denial.
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        micAllowed = granted
-        onMicResult(granted)
     }
 
     fun launchVoice() {
@@ -104,36 +91,20 @@ fun VoiceLogScreen(
             .onFailure { voice.markUnavailable() }
     }
 
-    // Kick off voice capture once on entry, but only with the microphone granted.
-    // On denial the typed fallback is the immediate next step, with an explanation.
+    // Kick off voice capture once, and only with the microphone granted. On denial
+    // the typed fallback is the immediate next step, with an explanation; the host
+    // already asked for the permission before routing here.
     LaunchedEffect(Unit) {
-        if (micAllowed) {
+        if (micGranted) {
+            speechStarted = true
             launchVoice()
-            return@LaunchedEffect
-        }
-        // Ask once; the result updates `micAllowed` and either path stays usable.
-        if (permissionAsked) return@LaunchedEffect
-        permissionAsked = true
-        val granted = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.RECORD_AUDIO,
-        ) == PackageManager.PERMISSION_GRANTED
-        if (granted) {
-            micAllowed = true
-            onMicResult(true)
-            launchVoice()
-        } else {
-            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
-    // Re-launch speech only when a permission grant lands after the screen is up, i.e.
-    // on a false -> true transition. Keying on the first composition too would double
-    // launch alongside the effect above.
-    var wasMicAllowed by rememberSaveable { mutableStateOf(micGranted) }
-    LaunchedEffect(micAllowed) {
-        val becameAllowed = micAllowed && !wasMicAllowed
-        wasMicAllowed = micAllowed
-        if (becameAllowed && !voiceState.listening && voiceState.finalText.isNullOrBlank()) {
+    // A grant can land after this screen is already showing (host prompt result, or
+    // the retry action): start speech then, but never twice.
+    LaunchedEffect(micGranted) {
+        if (micGranted && !speechStarted) {
+            speechStarted = true
             launchVoice()
         }
     }
@@ -165,14 +136,13 @@ fun VoiceLogScreen(
         vm.dismiss()
         text = ""
         voice.reset()
-        if (micAllowed) {
+        if (micGranted) {
+            speechStarted = true
             launchVoice()
-        } else if (!permissionAsked) {
-            permissionAsked = true
-            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         } else {
-            // Already denied once: do not nag, just leave the typed field in focus.
-            voice.markUnavailable()
+            // Re-ask the host; its result comes back through `micGranted`.
+            speechStarted = false
+            onRequestMic()
         }
     }
 
@@ -313,14 +283,14 @@ fun VoiceLogScreen(
                     item {
                         val status = voiceState.error
                             ?: when {
-                                !micAllowed -> "Izin mikrofon ditolak. Ketik makananmu."
+                                !micGranted -> "Izin mikrofon ditolak. Ketik makananmu."
                                 voiceState.listening -> "Mendengarkan..."
                                 else -> "Ketik manual"
                             }
                         Text(
                             text = status,
                             style = MaterialTheme.typography.titleSmall,
-                            color = if (voiceState.error != null || !micAllowed) {
+                            color = if (voiceState.error != null || !micGranted) {
                                 MaterialTheme.colorScheme.error
                             } else {
                                 MaterialTheme.colorScheme.primary
@@ -351,7 +321,7 @@ fun VoiceLogScreen(
                         OutlinedButton(
                             onClick = { voice.reset(); retryVoice() },
                             modifier = Modifier.fillMaxWidth(),
-                        ) { Text(if (micAllowed) "Catat suara lagi" else "Coba mikrofon lagi") }
+                        ) { Text(if (micGranted) "Catat suara lagi" else "Coba mikrofon lagi") }
                     }
 
                     item { TextButton(onClick = onClose) { Text("Batal") } }

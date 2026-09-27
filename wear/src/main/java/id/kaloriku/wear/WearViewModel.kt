@@ -12,6 +12,7 @@ import id.kaloriku.shared.domain.LogSource
 import id.kaloriku.shared.domain.MealType
 import id.kaloriku.shared.sync.SyncRole
 import id.kaloriku.shared.sync.SyncStatus
+import id.kaloriku.wear.tile.requestCalorieTileUpdate
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -89,6 +90,8 @@ class WearViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             container.repository.saveAnalysis(ready.result, LogSource.VOICE_WATCH)
             _analyzeState.value = WearAnalyzeState.Idle
+            // The tile's total changed; ask the system to rebuild it right away.
+            requestCalorieTileUpdate(getApplication())
             // Push the new entries to the phone automatically.
             container.sync.sync()
         }
@@ -107,6 +110,7 @@ class WearViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     container.repository.saveAnalysis(result, LogSource.VOICE_WATCH)
                     _analyzeState.value = WearAnalyzeState.Idle
+                    requestCalorieTileUpdate(getApplication())
                     container.sync.sync()
                 }
             } catch (e: Exception) {
@@ -129,11 +133,9 @@ class WearViewModel(app: Application) : AndroidViewModel(app) {
      * Returns null only when the entry genuinely no longer exists (deleted or unknown).
      */
     suspend fun findEntry(id: Long): FoodEntry? =
-        try {
-            container.repository.find(id)
-        } catch (e: Exception) {
-            null
-        }
+        // A read failure is indistinguishable from "not found" for the caller: both
+        // mean the screen cannot show a valid entry, and popping home is the safe end.
+        runCatching { container.repository.find(id) }.getOrNull()
 
     /**
      * Applies a user edit to an already-logged entry.
@@ -193,6 +195,7 @@ class WearViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             if (!applied) return null
+            requestCalorieTileUpdate(getApplication())
             container.sync.sync()
             // Read back the row we just wrote, so the caller never has to wait for the
             // Room flow to catch up before showing the new numbers.
@@ -209,6 +212,7 @@ class WearViewModel(app: Application) : AndroidViewModel(app) {
         _deleteBusy.value = true
         try {
             container.repository.delete(id)
+            requestCalorieTileUpdate(getApplication())
             container.sync.sync()
         } catch (e: Exception) {
             // Nothing to recover locally; the row and its tombstone stay as they are.
