@@ -2,6 +2,7 @@ package id.kaloriku.phone
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -35,12 +36,48 @@ import id.kaloriku.phone.ui.SettingsScreen
 import id.kaloriku.phone.ui.StatsScreen
 import id.kaloriku.phone.ui.theme.KaloriKuTheme
 import id.kaloriku.shared.KaloriKu
+import id.kaloriku.shared.domain.JakartaTime
 import id.kaloriku.shared.sync.SyncRole
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
     private val requestMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    /**
+     * Where the user wants the backup written. The contract only creates the document;
+     * the view model writes the bytes through the returned uri. A null uri means the
+     * picker was cancelled, which is not an error and is simply ignored.
+     */
+    private val createBackup = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri: Uri? ->
+        uri?.let { pendingExport?.exportBackup(it) }
+        pendingExport = null
+    }
+
+    /**
+     * The backup file to restore from.
+     *
+     * A wildcard MIME type is listed alongside `application/json` because several document
+     * providers report a stored `.json` file as `application/octet-stream` or with no type
+     * at all, which would hide a perfectly valid backup behind a greyed-out file row.
+     */
+    private val openBackup = registerForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        uri?.let { pendingImport?.inspectBackup(it) }
+        pendingImport = null
+    }
+
+    /**
+     * The view model a launcher should deliver its result to.
+     *
+     * The launchers outlive the composition, so the target is captured here when the
+     * launch happens instead of being read from the clicked lambda later.
+     */
+    private var pendingExport: MainViewModel? = null
+    private var pendingImport: MainViewModel? = null
 
     /** True when the user has already granted `RECORD_AUDIO`. */
     private fun hasMicPermission(): Boolean =
@@ -106,7 +143,17 @@ class MainActivity : ComponentActivity() {
                             0 -> DashboardScreen(vm, onRequestMic = micLauncher)
                             1 -> StatsScreen(vm)
                             2 -> InsightsScreen(vm)
-                            else -> SettingsScreen(vm)
+                            else -> SettingsScreen(
+                                vm = vm,
+                                onExportBackup = {
+                                    pendingExport = vm
+                                    createBackup.launch("kaloriku-backup-${JakartaTime.todayKey()}.json")
+                                },
+                                onImportBackup = {
+                                    pendingImport = vm
+                                    openBackup.launch(arrayOf("application/json", "*/*"))
+                                },
+                            )
                         }
                     }
                 }

@@ -5,8 +5,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -43,6 +45,10 @@ import id.kaloriku.wear.voice.WearVoiceInput
  * Voice logging on the watch: launch the platform speech activity, analyze with
  * Jev, confirm, save. A typed fallback is always available so logging still works
  * when no usable speech recognizer is installed.
+ *
+ * Each analyze state presents exactly one obvious primary action, with everything
+ * else demoted beneath it, so the screen never offers two equally weighted choices
+ * on a display this small. Analysis and microphone logic are untouched here.
  *
  * @param micGranted whether `RECORD_AUDIO` is currently granted. Speech is only
  *   auto-launched when it is; otherwise the typed fallback is shown immediately,
@@ -153,24 +159,38 @@ fun VoiceLogScreen(
             // Extra bottom padding keeps the last action clear of the scaling list's
             // shrunk/clipped edge so its label stays fully legible.
             contentPadding = PaddingValues(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             when (val state = analyzeState) {
+                // ------------------------------------------------------------------
+                // Ready: Jev answered. Save is the only filled action;
+                // "Ulangi" is the escape hatch and sits below it, unfilled.
+                // ------------------------------------------------------------------
                 is WearAnalyzeState.Ready -> {
                     item {
                         Text(
-                            text = "${state.result.totalKcal} kkal",
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.primary,
+                            text = "Perkiraan Jev",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     item {
-                        Text(
-                            text = state.result.meal.label,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                text = "${state.result.totalKcal} kkal",
+                                style = MaterialTheme.typography.displaySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Text(
+                                text = state.result.meal.label,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                     items(state.result.items.size) { index ->
                         val item = state.result.items[index]
@@ -180,7 +200,11 @@ fun VoiceLogScreen(
                                 containerColor = MaterialTheme.colorScheme.surfaceContainer,
                             ),
                         ) {
-                            Column {
+                            Column(
+                                modifier = Modifier.fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
                                 Text(item.name, style = MaterialTheme.typography.titleSmall)
                                 Text(
                                     "${item.kcal} kkal" +
@@ -189,7 +213,7 @@ fun VoiceLogScreen(
                                             item.isLocal -> " · lokal"
                                             else -> ""
                                         },
-                                    style = MaterialTheme.typography.bodySmall,
+                                    style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                                 // The dominant macro is a Jev decision carried transiently on
@@ -219,7 +243,7 @@ fun VoiceLogScreen(
                         item {
                             Text(
                                 text = "Kalori makanan baru dicari dari web.",
-                                style = MaterialTheme.typography.bodySmall,
+                                style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center,
                             )
@@ -240,7 +264,17 @@ fun VoiceLogScreen(
                     }
                 }
 
+                // ------------------------------------------------------------------
+                // Error: one thing to do — try again. Close stays as a text button.
+                // ------------------------------------------------------------------
                 is WearAnalyzeState.Error -> {
+                    item {
+                        Text(
+                            text = "Gagal menganalisa",
+                            style = MaterialTheme.typography.titleSmall,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                     item {
                         Text(
                             text = state.message,
@@ -258,13 +292,17 @@ fun VoiceLogScreen(
                     item { TextButton(onClick = onClose) { Text("Tutup") } }
                 }
 
+                // ------------------------------------------------------------------
+                // Running: nothing to press but the way out.
+                // ------------------------------------------------------------------
                 WearAnalyzeState.Running -> {
+                    item { Spacer(Modifier.height(8.dp)) }
                     item {
                         CircularProgressIndicator()
                     }
                     item {
                         Text(
-                            "Menganalisa dengan Jev...",
+                            "Menganalisa dengan Jev…",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,
@@ -278,19 +316,33 @@ fun VoiceLogScreen(
                     }
                 }
 
+                // ------------------------------------------------------------------
+                // Idle: listening or typing. The typed field leads, and whichever of
+                // "Analisa" / "Catat suara" matches the situation is the filled one.
+                // ------------------------------------------------------------------
                 WearAnalyzeState.Idle -> {
-                    // Status line: never a dead end — always explains the next step.
+                    val listening = voiceState.listening && voiceState.error == null
+                    val hasError = voiceState.error != null || !micGranted
+
                     item {
+                        if (listening) {
+                            // An explicit listening state, with the spinner as the only
+                            // motion on screen so the state change is unmistakable.
+                            CircularProgressIndicator()
+                        }
+                    }
+                    item {
+                        // Status line: never a dead end — always explains the next step.
                         val status = voiceState.error
                             ?: when {
                                 !micGranted -> "Izin mikrofon ditolak. Ketik makananmu."
-                                voiceState.listening -> "Mendengarkan..."
-                                else -> "Ketik manual"
+                                listening -> "Mendengarkan…"
+                                else -> "Ketik makananmu"
                             }
                         Text(
                             text = status,
                             style = MaterialTheme.typography.titleSmall,
-                            color = if (voiceState.error != null || !micGranted) {
+                            color = if (hasError) {
                                 MaterialTheme.colorScheme.error
                             } else {
                                 MaterialTheme.colorScheme.primary
@@ -309,19 +361,28 @@ fun VoiceLogScreen(
                         )
                     }
 
-                    item {
-                        Button(
-                            onClick = { analyzeNow() },
-                            enabled = text.isNotBlank(),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("Analisa") }
-                    }
-
-                    item {
-                        OutlinedButton(
-                            onClick = { voice.reset(); retryVoice() },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text(if (micGranted) "Catat suara lagi" else "Coba mikrofon lagi") }
+                    // Primary action depends on whether there is text to analyze. With
+                    // text, analyzing is the point; without it, re-listening is.
+                    if (text.isNotBlank()) {
+                        item {
+                            Button(
+                                onClick = { analyzeNow() },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("Analisa") }
+                        }
+                        item {
+                            OutlinedButton(
+                                onClick = { voice.reset(); retryVoice() },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text(if (micGranted) "Catat suara lagi" else "Coba mikrofon lagi") }
+                        }
+                    } else {
+                        item {
+                            Button(
+                                onClick = { voice.reset(); retryVoice() },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text(if (micGranted) "Catat suara lagi" else "Coba mikrofon lagi") }
+                        }
                     }
 
                     item { TextButton(onClick = onClose) { Text("Batal") } }

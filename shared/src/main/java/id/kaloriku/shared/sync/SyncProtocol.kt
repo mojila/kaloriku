@@ -103,33 +103,7 @@ object SyncCodec {
     }
 
     private fun encodeEntries(entries: List<FoodEntry>): JSONArray = JSONArray().apply {
-        entries.forEach { entry ->
-            put(
-                JSONObject().apply {
-                    put("id", entry.id)
-                    put("syncId", entry.syncId)
-                    put("loggedAt", entry.loggedAt)
-                    put("dayKey", entry.dayKey)
-                    put("meal", entry.meal.name)
-                    put("foodName", entry.foodName)
-                    put("canonicalName", entry.canonicalName ?: JSONObject.NULL)
-                    put("portionText", entry.portionText)
-                    put("grams", entry.grams ?: JSONObject.NULL)
-                    put("kcal", entry.kcal)
-                    put("kcalLow", entry.kcalLow)
-                    put("kcalHigh", entry.kcalHigh)
-                    put("confidence", entry.confidence)
-                    put("isLocal", entry.isLocal)
-                    put("webGrounded", entry.webGrounded)
-                    put("healthScore", entry.healthScore)
-                    put("source", entry.source.name)
-                    put("rawTranscript", entry.rawTranscript ?: JSONObject.NULL)
-                    put("notes", entry.notes ?: JSONObject.NULL)
-                    put("updatedAt", entry.updatedAt)
-                    put("deleted", entry.deleted)
-                },
-            )
-        }
+        entries.forEach { put(FoodEntryJson.encode(it)) }
     }
 
     private fun decodeEntries(array: JSONArray?): List<FoodEntry> {
@@ -137,34 +111,7 @@ object SyncCodec {
         val out = mutableListOf<FoodEntry>()
         for (i in 0 until array.length()) {
             val o = array.optJSONObject(i) ?: continue
-            val loggedAt = o.optLong("loggedAt")
-            out += FoodEntry(
-                id = o.optLong("id", 0),
-                syncId = o.optString("syncId"),
-                loggedAt = loggedAt,
-                dayKey = o.optString("dayKey").ifBlank { JakartaTime.dayKey(loggedAt) },
-                meal = MealType.fromKey(o.optString("meal")),
-                foodName = o.optString("foodName"),
-                canonicalName = if (o.isNull("canonicalName")) null else o.optString("canonicalName"),
-                portionText = o.optString("portionText"),
-                grams = if (o.isNull("grams")) null else o.optDouble("grams"),
-                kcal = o.optInt("kcal", 0),
-                kcalLow = o.optInt("kcalLow", o.optInt("kcal", 0)),
-                kcalHigh = o.optInt("kcalHigh", o.optInt("kcal", 0)),
-                confidence = o.optDouble("confidence", 1.0),
-                isLocal = o.optBoolean("isLocal", false),
-                // A peer on an older build sends no flag; its entries predate grounding.
-                webGrounded = o.optBoolean("webGrounded", false),
-                healthScore = o.optDouble("healthScore", 0.0),
-                source = LogSource.fromKey(o.optString("source")),
-                rawTranscript = if (o.isNull("rawTranscript")) null else o.optString("rawTranscript"),
-                notes = if (o.isNull("notes")) null else o.optString("notes"),
-                // A peer running an older build sends neither field. Treating such an
-                // entry as its own first revision keeps merges sane: any local edit
-                // (which bumps updatedAt) wins over it rather than being clobbered.
-                updatedAt = o.optLong("updatedAt", loggedAt),
-                deleted = o.optBoolean("deleted", false),
-            )
+            out += FoodEntryJson.decode(o)
         }
         return out
     }

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
@@ -32,14 +33,21 @@ import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.TextButton
 import id.kaloriku.shared.domain.FoodEntry
+import id.kaloriku.shared.domain.JakartaTime
 import id.kaloriku.wear.WearViewModel
 import kotlinx.coroutines.launch
 
 /**
- * Detail for one recent entry: range, confidence and meal type.
+ * Detail for one recent entry: what it was, how many calories, and how sure the
+ * estimate is.
  *
- * The entry can be edited or deleted from here. Delete asks for confirmation inline
- * (Wear has no room for a long dialog), and the screen closes once the entry is gone.
+ * Hierarchy mirrors the home screen: the food name and its calories lead, the
+ * supporting facts follow as one compact block of label/value rows. The entry can be
+ * edited or deleted; delete confirms inline, because a Wear dialog is mostly chrome
+ * on a 1.4" round display.
+ *
+ * The logged date/time is shown explicitly: an entry can be rescheduled to another
+ * day, so a bare "08:30" would be ambiguous for anything not logged today.
  */
 @Composable
 fun RecentDetailScreen(
@@ -53,14 +61,19 @@ fun RecentDetailScreen(
     val deleting by vm.deleteBusy.collectAsStateWithLifecycle()
     var confirmingDelete by remember(entry.id) { mutableStateOf(false) }
 
+    val todayKey = JakartaTime.todayKey()
+    val isToday = entry.dayKey == todayKey
+    val dayLabel = JakartaTime.label(entry.dayKey, todayKey)
+
     ScreenScaffold(scrollState = listState) {
         ScalingLazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            // --- Lead: what and how much -----------------------------------------
             item {
                 Text(
                     text = entry.foodName,
@@ -68,63 +81,68 @@ fun RecentDetailScreen(
                     textAlign = TextAlign.Center,
                 )
             }
-            if (entry.isEdited) {
-                item {
+            item {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
                     Text(
-                        text = "diedit",
+                        text = "${entry.kcal} kkal",
+                        style = MaterialTheme.typography.displaySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        text = if (entry.kcalLow != entry.kcalHigh) {
+                            "rentang ${entry.kcalLow}–${entry.kcalHigh} kkal"
+                        } else {
+                            "perkiraan pasti"
+                        },
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.tertiary,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-            }
-            if (entry.webGrounded) {
-                item {
-                    Text(
-                        text = "dari web",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.tertiary,
-                    )
-                }
-            }
-            item {
-                Text(
-                    text = "${entry.kcal} kkal",
-                    style = MaterialTheme.typography.displaySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-            item {
-                Text(
-                    text = if (entry.kcalLow != entry.kcalHigh) {
-                        "Rentang ${entry.kcalLow}-${entry.kcalHigh} kkal"
-                    } else {
-                        "Perkiraan pasti"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            item {
-                DetailLine("Waktu makan", entry.meal.label)
-            }
-            item {
-                DetailLine("Porsi", entry.portionText.ifBlank { "tidak disebut" })
-            }
-            item {
-                DetailLine("Kepercayaan", "${(entry.confidence * 100).toInt()}%")
-            }
-            item {
-                DetailLine("Jenis", if (entry.isLocal) "Makanan lokal" else "Umum")
-            }
-            item {
-                DetailLine("Sumber", entry.source.label)
             }
 
+            // Provenance badges, only when they actually apply.
+            if (entry.isEdited || entry.webGrounded) {
+                item {
+                    Text(
+                        text = buildList {
+                            if (entry.isEdited) add("diedit")
+                            if (entry.webGrounded) add("dari web")
+                        }.joinToString(" · "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+
+            // --- Supporting facts, as one block of label/value rows --------------
+            item {
+                FactsCard {
+                    // When it happened first: the day is the field a reschedule
+                    // changes, and it is what makes the time unambiguous.
+                    FactRow(label = "Waktu", value = "${dayLabel}, ${timeText(entry.loggedAt)}")
+                    if (!isToday) {
+                        FactRow(label = "Tanggal", value = JakartaTime.fullDate(entry.dayKey))
+                    }
+                    FactDivider()
+                    FactRow(label = "Waktu makan", value = entry.meal.label)
+                    FactRow(label = "Porsi", value = entry.portionText.ifBlank { "tidak disebut" })
+                    FactDivider()
+                    FactRow(label = "Kepercayaan", value = "${(entry.confidence * 100).toInt()}%")
+                    FactRow(label = "Jenis", value = if (entry.isLocal) "Makanan lokal" else "Umum")
+                    FactRow(label = "Sumber", value = entry.source.label)
+                }
+            }
+
+            // --- Actions ----------------------------------------------------------
             item {
                 Button(
                     onClick = { onEdit(entry) },
                     enabled = !deleting,
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    modifier = Modifier.fillMaxWidth(),
                 ) { Text("Ubah") }
             }
 
@@ -201,18 +219,8 @@ fun RecentDetailScreen(
                     Text("Kembali")
                 }
             }
-        }
-    }
-}
 
-@Composable
-private fun DetailLine(label: String, value: String) {
-    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            text = label.uppercase(),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(text = value, style = MaterialTheme.typography.bodySmall)
+            item { Spacer(Modifier.height(16.dp)) }
+        }
     }
 }

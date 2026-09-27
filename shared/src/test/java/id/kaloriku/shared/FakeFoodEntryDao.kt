@@ -95,6 +95,6 @@ class FakeFoodEntryDao : FoodEntryDao {
         rows.value = rows.value.filterNot { it.deleted && !it.pendingSync && it.updatedAt < olderThan }
     }
 
-    /** Test helper: everything currently stored. */
-    fun all(): List<FoodEntryEntity> = rows.value
+    /** Test helper: everything currently stored, tombstones included. */
+    override suspend fun all(): List<FoodEntryEntity> = rows.value.sortedBy { it.loggedAt }
 }

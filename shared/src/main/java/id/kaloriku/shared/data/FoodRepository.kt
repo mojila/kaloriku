@@ -148,19 +148,41 @@ class FoodRepository(
      * [updatedAt] is bumped so the change wins the next merge, and the row is marked
      * pending again so the peer receives the new revision. Returns false when the
      * entry no longer exists (deleted elsewhere in the meantime).
+     *
+     * [newLoggedAt] moves the entry to a different point in time (the user corrected
+     * the date/time it was logged at). It is null for an ordinary edit, which keeps
+     * the original [FoodEntry.loggedAt] — the identity of the row — untouched. When a
+     * new time is given, [FoodEntry.dayKey] is recomputed from it so the entry shows up
+     * on the day it was actually eaten, and the new value is delivered to the peer like
+     * any other revision. A reschedule must not be done through [transform] alone: the
+     * repository deliberately overwrites [FoodEntry.loggedAt] and [FoodEntry.dayKey]
+     * after the transform runs, so the two fields stay consistent with each other.
      */
     suspend fun updateEntry(
         id: Long,
         nowMillis: Long = System.currentTimeMillis(),
+        newLoggedAt: Long? = null,
         transform: (FoodEntry) -> FoodEntry,
     ): Boolean {
         val existing = dao.findById(id) ?: return false
         if (existing.deleted) return false
+        // An edit revision must never predate the entry's own loggedAt, otherwise a
+        // reschedule to a future date would leave updatedAt < loggedAt. It must also stay
+        // strictly greater than loggedAt: isEdited is defined as updatedAt > loggedAt, so
+        // a revision that merely equals it would make a reschedule look un-edited.
+        // Only a reschedule can move loggedAt, so an ordinary edit is left untouched.
+        val revision = if (newLoggedAt == null) {
+            nowMillis
+        } else {
+            val floor = if (newLoggedAt == Long.MAX_VALUE) Long.MAX_VALUE else newLoggedAt + 1
+            maxOf(nowMillis, floor)
+        }
         val edited = transform(existing.toDomain()).copy(
             id = existing.id,
             syncId = existing.syncId,
-            loggedAt = existing.loggedAt,
-            updatedAt = nowMillis,
+            loggedAt = newLoggedAt ?: existing.loggedAt,
+            dayKey = newLoggedAt?.let { JakartaTime.dayKey(it) } ?: existing.dayKey,
+            updatedAt = revision,
             deleted = false,
         )
         dao.update(edited.toEntity(pendingSync = true))
@@ -270,6 +292,66 @@ class FoodRepository(
     }
 
     suspend fun count(): Int = dao.count()
+
+    /**
+     * Every row, tombstones included, for writing a backup.
+     *
+     * Tombstones are deliberately part of a backup: restoring a log without them would
+     * let a deleted entry come back to life the moment the watch re-syncs its copy.
+     */
+    suspend fun allForBackup(): List<FoodEntry> =
+        dao.all().map { it.toDomain() }
+
+    /**
+     * Restores entries from a backup.
+     *
+     * The restore is authoritative: each entry is written with a revision of [nowMillis]
+     * so it wins the next merge against anything already on either device. That bump is
+     * what makes a restore actually work rather than silently no-op — an entry restored
+     * with its original, older `updatedAt` would lose to a local tombstone (the user
+     * cleared their data) or to a newer copy on the watch, and would be deleted again.
+     *
+     * "Authoritative" holds while [nowMillis] is at least the competing revision. A row
+     * whose stored revision is *later* than [nowMillis] keeps that later value (see the
+     * `maxOf` below), so a future-dated tombstone can still win — correct, since the
+     * clock cannot be trusted to decide that a deletion never happened.
+     *
+     * A consequence worth knowing: a restored row reports as edited, because it genuinely
+     * was rewritten just now. That is the price of guaranteeing the restore sticks.
+     *
+     * Rows are matched on [FoodEntry.syncId], so restoring the same file twice is
+     * idempotent instead of duplicating the log. Entries already present keep their local
+     * row id; new ones are inserted. Returns the number of rows written.
+     */
+    suspend fun restore(entries: List<FoodEntry>, nowMillis: Long = System.currentTimeMillis()): Int {
+        var written = 0
+        entries.forEach { entry ->
+            // Same validity bar as the decoder: a row with no identity could never be
+            // deduplicated, and one with no name is invisible in the log. Rejecting both
+            // here keeps the method safe for any caller, not just BackupCodec's.
+            if (entry.syncId.isBlank() || entry.foodName.isBlank()) return@forEach
+            val existing = dao.findBySyncId(entry.syncId)
+            val revision = maxOf(nowMillis, entry.updatedAt)
+            if (existing == null) {
+                dao.insert(
+                    entry.copy(
+                        id = 0,
+                        updatedAt = revision,
+                        // Queue it so the peer converges to the restored state too.
+                    ).toEntity(pendingSync = true, deleted = entry.deleted),
+                )
+            } else {
+                dao.update(
+                    entry.copy(
+                        id = existing.id,
+                        updatedAt = revision,
+                    ).toEntity(pendingSync = true, deleted = entry.deleted),
+                )
+            }
+            written++
+        }
+        return written
+    }
 
     suspend fun summary(dayKey: String = JakartaTime.todayKey()): DailySummary {
         val entries = dayEntries(dayKey)

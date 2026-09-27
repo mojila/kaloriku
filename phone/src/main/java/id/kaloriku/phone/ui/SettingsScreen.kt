@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import id.kaloriku.phone.BackupStatus
 import id.kaloriku.phone.MainViewModel
 import id.kaloriku.shared.ai.KenariClient
 import id.kaloriku.shared.domain.JakartaTime
@@ -44,9 +45,15 @@ private fun syncTimeText(epochMillis: Long): String =
         .format(DateTimeFormatter.ofPattern("HH:mm", java.util.Locale.forLanguageTag("id-ID")))
 
 @Composable
-fun SettingsScreen(vm: MainViewModel) {
+fun SettingsScreen(
+    vm: MainViewModel,
+    onExportBackup: () -> Unit = {},
+    onImportBackup: () -> Unit = {},
+) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val syncStatus by vm.syncStatus.collectAsStateWithLifecycle()
+    val backupStatus by vm.backupStatus.collectAsStateWithLifecycle()
+    val pendingRestore by vm.pendingRestore.collectAsStateWithLifecycle()
     var target by remember(settings.dailyTargetKcal) { mutableFloatStateOf(settings.dailyTargetKcal.toFloat()) }
     var showReset by remember { mutableStateOf(false) }
 
@@ -160,6 +167,66 @@ fun SettingsScreen(vm: MainViewModel) {
 
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionLabel("Cadangan")
+                Text(
+                    text = "Cadangan berisi seluruh catatan makananmu beserta target kalori " +
+                        "harian. Berkasnya kamu simpan sendiri di lokasi pilihanmu, jadi " +
+                        "bisa dipulihkan kapan saja atau dipindah ke HP baru.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                val busy = backupStatus is BackupStatus.Working
+                Button(
+                    onClick = onExportBackup,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (backupStatus is BackupStatus.Working) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Simpan cadangan")
+                }
+                OutlinedButton(
+                    onClick = onImportBackup,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Pulihkan dari cadangan")
+                }
+                when (val status = backupStatus) {
+                    is BackupStatus.Working -> Callout(
+                        text = status.message,
+                        action = {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        },
+                    )
+                    is BackupStatus.Done -> Callout(
+                        text = status.message,
+                        action = {
+                            TextButton(onClick = { vm.clearBackupStatus() }) { Text("Tutup") }
+                        },
+                    )
+                    is BackupStatus.Failed -> Callout(
+                        text = status.message,
+                        emphasis = true,
+                        action = {
+                            TextButton(onClick = { vm.clearBackupStatus() }) { Text("Tutup") }
+                        },
+                    )
+                    BackupStatus.Idle -> Unit
+                }
+            }
+        }
+
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SectionLabel("Data")
                 Text(
                     text = "Menghapus data akan menghapus semua catatan makanan di HP ini " +
@@ -218,6 +285,26 @@ fun SettingsScreen(vm: MainViewModel) {
             },
             dismissButton = {
                 TextButton(onClick = { showReset = false }) { Text("Batal") }
+            },
+        )
+    }
+
+    pendingRestore?.let { file ->
+        AlertDialog(
+            onDismissRequest = { vm.cancelRestore() },
+            title = { Text("Pulihkan dari cadangan?") },
+            text = {
+                Text(
+                    "Berkas ini berisi ${file.liveEntryCount} catatan. Catatan dengan " +
+                        "identitas yang sama akan ditimpa isi cadangan, dan catatan baru " +
+                        "akan ditambahkan. Target kalori harian juga ikut dipulihkan.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.confirmRestore() }) { Text("Pulihkan") }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.cancelRestore() }) { Text("Batal") }
             },
         )
     }

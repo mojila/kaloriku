@@ -10,9 +10,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -35,17 +37,25 @@ import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.TextButton
 import id.kaloriku.shared.domain.FoodEntry
+import id.kaloriku.shared.domain.JakartaTime
 import id.kaloriku.shared.domain.MealType
 import id.kaloriku.wear.WearViewModel
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.launch
 
 /**
- * Edit one logged entry: name, portion and meal.
+ * Edit one logged entry: name, portion, meal and the date/time it was logged at.
  *
  * The watch has no room for a dense form, so the fields are two tappable cards that
- * open the system keyboard and the meal is chosen from four large chips. Changing the
- * name or portion re-estimates the calories through Jev on save; changing only the
- * meal saves instantly. The current estimate is shown so the user sees the update.
+ * open the system keyboard and the meal is chosen from four large chips. The date/time
+ * editor is a compact row of steppers rather than a Material `DatePicker`: on a ~1.4"
+ * round display a calendar grid is cramped and hard to hit, while +/- buttons and two
+ * quick "Hari ini"/"Kemarin" chips keep every target thumb-sized.
+ *
+ * Changing the name or portion re-estimates the calories through Jev on save; changing
+ * the meal or only the date/time saves instantly and reuses the existing numbers. The
+ * current estimate is shown so the user sees the update.
  */
 @Composable
 fun EditEntryScreen(
@@ -63,10 +73,21 @@ fun EditEntryScreen(
     var foodName by rememberSaveable(entry.id) { mutableStateOf(entry.foodName) }
     var portionText by rememberSaveable(entry.id) { mutableStateOf(entry.portionText) }
     var meal by rememberSaveable(entry.id, stateSaver = mealSaver) { mutableStateOf(entry.meal) }
+    // The edited date/time as its two user-facing parts: the Jakarta day key and the
+    // wall-clock time. Kept as separate primitives so all three save as plain values.
+    var dayKey by rememberSaveable(entry.id) { mutableStateOf(entry.dayKey) }
+    var hour by rememberSaveable(entry.id) { mutableIntStateOf(JakartaTime.hourOfDay(entry.loggedAt)) }
+    var minute by rememberSaveable(entry.id) { mutableIntStateOf(JakartaTime.minuteOfHour(entry.loggedAt)) }
     // Live estimate shown while editing; only changes after a save re-estimates it.
     var shownKcal by remember(entry.id) { mutableStateOf(entry.kcal) }
     var shownRange by remember(entry.id) { mutableStateOf(entry.kcalRangeText) }
     var error by remember(entry.id) { mutableStateOf<String?>(null) }
+
+    // True only when the user actually moved the entry, used for the hint line and to
+    // decide whether the repository needs a new timestamp at all.
+    val scheduleChanged = dayKey != entry.dayKey ||
+        hour != JakartaTime.hourOfDay(entry.loggedAt) ||
+        minute != JakartaTime.minuteOfHour(entry.loggedAt)
 
     fun save() {
         if (foodName.isBlank() || busy) return
@@ -77,6 +98,9 @@ fun EditEntryScreen(
                 portionText = portionText,
                 meal = meal,
                 notes = entry.notes,
+                dayKey = dayKey,
+                hour = hour,
+                minute = minute,
             )
             if (updated != null) {
                 // The persisted numbers come straight from the write, so the calorie
@@ -160,6 +184,39 @@ fun EditEntryScreen(
             }
 
             item {
+                Text(
+                    text = "TANGGAL & JAM",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().paddingForSection(),
+                )
+            }
+
+            item {
+                DateTimeEditor(
+                    dayKey = dayKey,
+                    hour = hour,
+                    minute = minute,
+                    enabled = !busy,
+                    onDayKeyChange = { dayKey = it },
+                    onHourChange = { hour = it },
+                    onMinuteChange = { minute = it },
+                )
+            }
+
+            if (scheduleChanged) {
+                item {
+                    Text(
+                        text = "Dipindah ke ${JakartaTime.fullDate(dayKey)} " +
+                            formatTime(hour, minute),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+
+            item {
                 Button(
                     onClick = { save() },
                     enabled = foodName.isNotBlank() && !busy,
@@ -182,7 +239,14 @@ fun EditEntryScreen(
                 val isFoodChanged = foodName.trim() != entry.foodName.trim() ||
                     portionText.trim() != entry.portionText.trim()
                 Text(
-                    text = if (isFoodChanged) "Kalori dihitung ulang" else "Kalori tidak berubah",
+                    text = if (isFoodChanged) {
+                        "Kalori dihitung ulang"
+                    } else {
+                        // A date/time-only move never re-estimates, so say so explicitly
+                        // rather than leaving the user unsure whether the move cost a
+                        // fresh Jev call.
+                        "Kalori tidak berubah"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -272,6 +336,228 @@ private fun MealChip(
     }
 }
 
+/**
+ * Compact date/time editor for the round display.
+ *
+ * A Material `DatePicker` needs a full-screen calendar that never fits a ~1.4" watch
+ * comfortably, so the day is chosen with two quick chips plus a day stepper and the
+ * time with hour/minute steppers. Everything is a large button; there is no text field
+ * and therefore no keyboard.
+ */
+@Composable
+private fun DateTimeEditor(
+    dayKey: String,
+    hour: Int,
+    minute: Int,
+    enabled: Boolean,
+    onDayKeyChange: (String) -> Unit,
+    onHourChange: (Int) -> Unit,
+    onMinuteChange: (Int) -> Unit,
+) {
+    val today = JakartaTime.todayKey()
+    val dayLabel = JakartaTime.label(dayKey, today)
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        // The exact calendar day is always visible, so a stepper press never leaves the
+        // user guessing which date they landed on.
+        Text(
+            text = "${JakartaTime.fullDate(dayKey)} • $dayLabel",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+
+        // Quick jumps for the two days that cover almost every correction.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            QuickDayButton(
+                label = "Hari ini",
+                selected = dayKey == today,
+                enabled = enabled,
+                onClick = { onDayKeyChange(today) },
+                modifier = Modifier.weight(1f),
+            )
+            QuickDayButton(
+                label = "Kemarin",
+                selected = dayKey == shiftDay(today, -1),
+                enabled = enabled,
+                onClick = { onDayKeyChange(shiftDay(today, -1)) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+
+        // Day stepper: one step is one calendar day in Asia/Jakarta.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            StepButton(
+                label = "−",
+                enabled = enabled,
+                onClick = { onDayKeyChange(shiftDay(dayKey, -1)) },
+                modifier = Modifier.weight(1f),
+            )
+            StepReadout(text = "hari", modifier = Modifier.weight(1.2f))
+            StepButton(
+                label = "+",
+                enabled = enabled,
+                onClick = { onDayKeyChange(shiftDay(dayKey, 1)) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+
+        // Time stepper: hour and minute each get a pair of buttons around a readout.
+        // Steppers beat a keyboard here: the target stays large and the value wraps.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            StepColumnLabel(text = "Jam")
+            StepButtonSmall(
+                label = "−",
+                enabled = enabled,
+                onClick = { onHourChange(floorMod(hour - 1, 24)) },
+            )
+            StepReadout(text = "%02d".format(hour))
+            StepButtonSmall(
+                label = "+",
+                enabled = enabled,
+                onClick = { onHourChange(floorMod(hour + 1, 24)) },
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            StepColumnLabel(text = "Menit")
+            StepButtonSmall(
+                label = "−",
+                enabled = enabled,
+                onClick = { onMinuteChange(floorMod(minute - 5, 60)) },
+            )
+            StepReadout(text = "%02d".format(minute))
+            StepButtonSmall(
+                label = "+",
+                enabled = enabled,
+                onClick = { onMinuteChange(floorMod(minute + 5, 60)) },
+            )
+        }
+    }
+}
+
+/** A quick-jump chip for a named day; filled when it is the current selection. */
+@Composable
+private fun QuickDayButton(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (selected) {
+        Button(onClick = onClick, enabled = enabled, modifier = modifier) { Text(label) }
+    } else {
+        Card(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = modifier,
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            ),
+        ) {
+            Box(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(text = label, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+    }
+}
+
+/** Large +/− target used for the day stepper. */
+@Composable
+private fun StepButton(
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Button(onClick = onClick, enabled = enabled, modifier = modifier) {
+        Text(text = label, style = MaterialTheme.typography.titleMedium)
+    }
+}
+
+/** Slightly smaller +/− target for the hour/minute rows. */
+@Composable
+private fun StepButtonSmall(
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.size(44.dp),
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        Text(text = label, style = MaterialTheme.typography.labelLarge)
+    }
+}
+
+/** Centered readout that shows the value a stepper pair is editing. */
+@Composable
+private fun StepReadout(text: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.heightIn(min = 44.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+/** Fixed-width row label so the hour and minute rows line up. */
+@Composable
+private fun StepColumnLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.width(44.dp),
+    )
+}
+
+/** "HH:mm" for the hint line. */
+private fun formatTime(hour: Int, minute: Int): String = "%02d:%02d".format(hour, minute)
+
+/**
+ * Moves [dayKey] by [days] calendar days.
+ *
+ * Uses [LocalDate] rather than millisecond arithmetic so a month/year boundary and a
+ * short month are handled by the calendar, not by hand. An unparseable key is left
+ * as-is; a day key can only ever be produced by [JakartaTime], so this is defensive.
+ */
+private fun shiftDay(dayKey: String, days: Long): String = runCatching {
+    LocalDate.parse(dayKey, DateTimeFormatter.ISO_LOCAL_DATE).plusDays(days)
+        .format(DateTimeFormatter.ISO_LOCAL_DATE)
+}.getOrDefault(dayKey)
+
+/** Modulo that never returns a negative value, for wrapping the hour/minute steppers. */
+private fun floorMod(value: Int, modulus: Int): Int = ((value % modulus) + modulus) % modulus
+
 // Small layout helper keeps the section padding consistent with the other screens.
 private fun Modifier.paddingForSection(): Modifier =
     padding(top = 8.dp, start = 4.dp)
+

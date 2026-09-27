@@ -37,4 +37,14 @@ class SettingsStore(private val context: Context) : SettingsSource {
     suspend fun setDailyTarget(value: Int) {
         context.dataStore.edit { it[Keys.target] = value.coerceIn(500, 6000) }
     }
+
+    /**
+     * Applies a restored [AppSettings].
+     *
+     * Clamped the same way as [setDailyTarget] so a hand-edited or corrupt backup file
+     * cannot push the app into a state its own slider can never produce.
+     */
+    suspend fun restore(settings: AppSettings) {
+        context.dataStore.edit { it[Keys.target] = settings.dailyTargetKcal.coerceIn(500, 6000) }
+    }
 }

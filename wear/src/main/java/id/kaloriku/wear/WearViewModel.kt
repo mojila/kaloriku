@@ -141,10 +141,17 @@ class WearViewModel(app: Application) : AndroidViewModel(app) {
      * Applies a user edit to an already-logged entry.
      *
      * When the name or portion changed the calorie estimate is no longer valid, so it
-     * is re-asked through Jev via [FoodAnalyzer.reestimate]; editing only the meal or
-     * notes reuses the previous numbers and makes no network call. The write preserves
-     * the entry's identity (the repository forces `id`/`syncId`/`loggedAt`) and marks
-     * the row as hand-edited with [LogSource.MANUAL] before syncing to the phone.
+     * is re-asked through Jev via [FoodAnalyzer.reestimate]; editing only the meal,
+     * notes or the date/time reuses the previous numbers and makes no network call.
+     * The write preserves the entry's identity (the repository forces `id`/`syncId`)
+     * and marks the row as hand-edited with [LogSource.MANUAL] before syncing.
+     *
+     * [dayKey]/[hour]/[minute] are the corrected date/time: a wrong-day or wrong-time
+     * entry can be moved by the user. The new instant travels through the repository's
+     * `newLoggedAt` parameter, never through [transform] — the repository overwrites
+     * `loggedAt`/`dayKey` after the transform runs, so setting them in the lambda would
+     * be silently discarded. Passing null (no change) leaves the original timestamp
+     * untouched. Rescheduling does not touch [meal]: the meal the user picked stays.
      *
      * @return the persisted entry so the caller can show the new numbers without
      *   racing the database flow, or null when the entry was gone or the write failed.
@@ -155,6 +162,9 @@ class WearViewModel(app: Application) : AndroidViewModel(app) {
         portionText: String,
         meal: MealType,
         notes: String?,
+        dayKey: String,
+        hour: Int,
+        minute: Int,
     ): FoodEntry? {
         val trimmedName = foodName.trim()
         if (trimmedName.isEmpty()) return null
@@ -164,8 +174,11 @@ class WearViewModel(app: Application) : AndroidViewModel(app) {
             val current = container.repository.find(id) ?: return null
             val nameOrPortionChanged =
                 current.foodName.trim() != trimmedName || current.portionText.trim() != trimmedPortion
-            // Only a name/portion change invalidates the estimate, so only then is Jev
-            // asked again; a meal or note edit reuses the existing numbers.
+            // A pure reschedule must not invalidate the estimate: only the name/portion
+            // check above feeds this, so moving the date/time never asks Jev again.
+            val newLoggedAt = JakartaTime.atTime(dayKey, hour, minute)
+                // A no-op reschedule stays null so the row is not needlessly re-revisioned.
+                .takeIf { it != current.loggedAt }
             val estimate = if (nameOrPortionChanged) {
                 container.analyzer.reestimate(
                     name = trimmedName,
@@ -177,7 +190,10 @@ class WearViewModel(app: Application) : AndroidViewModel(app) {
             } else {
                 null
             }
-            val applied = container.repository.updateEntry(id) { existing ->
+            val applied = container.repository.updateEntry(
+                id = id,
+                newLoggedAt = newLoggedAt,
+            ) { existing ->
                 existing.copy(
                     foodName = trimmedName,
                     canonicalName = estimate?.canonicalName ?: existing.canonicalName,

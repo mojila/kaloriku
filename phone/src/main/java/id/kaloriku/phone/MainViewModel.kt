@@ -1,10 +1,15 @@
 package id.kaloriku.phone
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import id.kaloriku.shared.KaloriKu
 import id.kaloriku.shared.analysis.Insight
+import id.kaloriku.shared.data.BackupCodec
+import id.kaloriku.shared.data.BackupError
+import id.kaloriku.shared.data.BackupFile
+import id.kaloriku.shared.data.BackupParseResult
 import id.kaloriku.shared.domain.AnalysisResult
 import id.kaloriku.shared.domain.AnalyzedItem
 import id.kaloriku.shared.domain.AppSettings
@@ -16,6 +21,7 @@ import id.kaloriku.shared.domain.LogSource
 import id.kaloriku.shared.domain.MealType
 import id.kaloriku.shared.sync.SyncRole
 import id.kaloriku.shared.sync.SyncStatus
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +29,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** UI state for an in-progress or finished analysis. */
 sealed interface AnalyzeState {
@@ -30,6 +37,20 @@ sealed interface AnalyzeState {
     data object Running : AnalyzeState
     data class Ready(val result: AnalysisResult) : AnalyzeState
     data class Error(val message: String) : AnalyzeState
+}
+
+/**
+ * Result of the last backup or restore action, for the "Cadangan" section.
+ *
+ * Kept as an explicit state rather than a nullable string so the UI can distinguish
+ * "nothing happened yet" from "the last attempt failed" and colour the message
+ * accordingly. [Working] is the only state in which the action buttons are busy.
+ */
+sealed interface BackupStatus {
+    data object Idle : BackupStatus
+    data class Working(val message: String) : BackupStatus
+    data class Done(val message: String) : BackupStatus
+    data class Failed(val message: String) : BackupStatus
 }
 
 data class DashboardUi(
@@ -40,6 +61,101 @@ data class DashboardUi(
 ) {
     val remaining: Int get() = (target - todayTotal).coerceAtLeast(0)
     val progress: Float get() = if (target <= 0) 0f else (todayTotal.toFloat() / target).coerceIn(0f, 1f)
+}
+
+/**
+ * A day's calories shown against the target, for the Wawasan trend list.
+ *
+ * [deltaKcal] is signed relative to the target so the UI can colour an over/under day
+ * without recomputing it, and [isOver] makes the intent explicit at the call site.
+ */
+data class DayRow(
+    val dayKey: String,
+    val kcal: Int,
+    val entries: Int,
+    val target: Int,
+) {
+    val deltaKcal: Int get() = kcal - target
+    val isOver: Boolean get() = deltaKcal > 0
+    val hasData: Boolean get() = entries > 0
+}
+
+/**
+ * The aggregate facts behind the "Wawasan" screen.
+ *
+ * Computed in one place from the same summaries the stats tab reads, so the headline
+ * numbers, the trend list and the Jev conclusion can never disagree with each other.
+ * All fields are plain values: no Compose, no Android, trivially testable.
+ *
+ * Averages deliberately ignore days with no entries. Averaging in a zero for a day the
+ * user simply did not log would understate their intake and make the trend look like a
+ * crash rather than a gap, which is why [loggedDays] is reported separately.
+ */
+data class InsightSummary(
+    val target: Int = AppSettings.DEFAULT_TARGET,
+    val loggedDays: Int = 0,
+    val totalDays: Int = 0,
+    val avgKcal: Int = 0,
+    /** The logged day whose total sat closest to the target. */
+    val bestDay: DayRow? = null,
+    /** The logged day with the most calories. */
+    val highestDay: DayRow? = null,
+    val healthScore: Double = 0.0,
+    val localShare: Double = 0.0,
+    val streak: Int = 0,
+    val overTargetDays: Int = 0,
+    val days: List<DayRow> = emptyList(),
+) {
+    val hasData: Boolean get() = loggedDays > 0
+    val totalKcal: Int get() = days.sumOf { it.kcal }
+
+    /** Share of logged days that finished above target, 0..1. */
+    val overTargetShare: Double
+        get() = if (loggedDays == 0) 0.0 else overTargetDays.toDouble() / loggedDays
+
+    /** Signed gap between the average day and the target. */
+    val avgDeltaKcal: Int get() = avgKcal - target
+
+    /**
+     * The single most useful thing to tell the user right now, in Indonesian.
+     *
+     * Derived from the same numbers the screen shows, so it is a reading of the data
+     * rather than a second, competing opinion. The Jev conclusion sits below it.
+     */
+    val headline: String
+        get() = when {
+            !hasData -> "Belum ada catatan. Mulai catat makananmu untuk melihat ringkasan."
+            streak >= 7 -> "Konsisten: $streak hari berturut-turut tercatat."
+            overTargetShare >= 0.5 && avgDeltaKcal > 0 ->
+                "Rata-rata ${avgDeltaKcal} kkal di atas target. Perhatikan porsi dan gorengan."
+            avgDeltaKcal < -300 ->
+                "Rata-rata ${-avgDeltaKcal} kkal di bawah target. Pastikan asupanmu cukup."
+            else -> "Rata-rata $avgKcal kkal per hari, dekat dengan target $target kkal."
+        }
+}
+
+/** Builds the Wawasan summary from the raw daily rows. Pure; no I/O. */
+internal fun buildInsightSummary(
+    target: Int,
+    days: List<DayRow>,
+    healthScore: Double,
+    localShare: Double,
+): InsightSummary {
+    val logged = days.filter { it.hasData }
+    val streak = days.asReversed().takeWhile { it.hasData }.size
+    return InsightSummary(
+        target = target,
+        loggedDays = logged.size,
+        totalDays = days.size,
+        avgKcal = if (logged.isEmpty()) 0 else logged.map { it.kcal }.average().toInt(),
+        bestDay = logged.minByOrNull { kotlin.math.abs(it.deltaKcal) },
+        highestDay = logged.maxByOrNull { it.kcal },
+        healthScore = healthScore,
+        localShare = localShare,
+        streak = streak,
+        overTargetDays = logged.count { it.isOver },
+        days = days,
+    )
 }
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -134,6 +250,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _summaries = MutableStateFlow<List<DailySummary>>(emptyList())
     val summaries: StateFlow<List<DailySummary>> = _summaries.asStateFlow()
+
+    /**
+     * The Wawasan screen's aggregate facts, rebuilt whenever [loadStats] runs.
+     *
+     * Derived from the same [DailySummary] rows the statistics tab uses, so the two
+     * screens can never disagree. Held as a StateFlow rather than recomputed in the
+     * composable because it is a pure fold over the loaded data, not a rendering detail.
+     */
+    private val _insightSummary = MutableStateFlow(InsightSummary())
+    val insightSummary: StateFlow<InsightSummary> = _insightSummary.asStateFlow()
 
     private val _topFoods = MutableStateFlow<List<Pair<String, Int>>>(emptyList())
     val topFoods: StateFlow<List<Pair<String, Int>>> = _topFoods.asStateFlow()
@@ -265,14 +391,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * Applies an edit to the entry currently open in the sheet.
      *
      * When the user changed the food name or the portion, the calorie estimate is
-     * re-asked from Jev via [FoodAnalyzer.reestimate]; changing only the meal or the
-     * notes is a pure metadata edit and skips the network entirely.
+     * re-asked from Jev via [FoodAnalyzer.reestimate]; changing only the meal, the
+     * notes or the logged date/time is a pure metadata edit and skips the network
+     * entirely. A reschedule is passed through [FoodRepository.updateEntry]'s
+     * `newLoggedAt` so the repository can recompute the day key alongside it.
      */
     fun editEntry(
         foodName: String,
         portionText: String,
         meal: MealType,
         notes: String,
+        dayKey: String,
+        hour: Int,
+        minute: Int,
     ) {
         val editing = _editing.value ?: return
         // Ignore a second save while the first is still running, so a double tap cannot
@@ -282,6 +413,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (name.isBlank()) return
         val portion = portionText.trim()
         val trimmedNotes = notes.trim().ifBlank { null }
+        val newLoggedAt = JakartaTime.atTime(dayKey, hour, minute)
 
         viewModelScope.launch {
             var applied = false
@@ -293,6 +425,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _editError.value = "Catatan ini sudah dihapus di perangkat lain."
                     return@launch
                 }
+                // Changing only the date/time is a reschedule, not a calorie change:
+                // the estimate stays name/portion-only.
+                val timeChanged = newLoggedAt != current.loggedAt
                 val needsReestimate =
                     !name.equals(current.foodName.trim(), ignoreCase = true) ||
                         portion != current.portionText.trim()
@@ -316,6 +451,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     meal = meal,
                     notes = trimmedNotes,
                     estimate = estimate,
+                    newLoggedAt = newLoggedAt.takeIf { timeChanged },
                 )
                 // A rename or a portion change re-asks Jev, so record the fresh macro
                 // decision. A metadata-only edit (no estimate) leaves the row's macro
@@ -347,6 +483,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * values, so an edit made elsewhere in the meantime is not clobbered by a stale
      * snapshot of the sheet.
      *
+     * A non-null [newLoggedAt] moves the entry to a corrected date/time; it is handed
+     * to [FoodRepository.updateEntry] as a dedicated argument because that method
+     * overwrites `loggedAt`/`dayKey` after the transform runs.
+     *
      * @return true when the row still existed and was written.
      */
     private suspend fun applyEdit(
@@ -356,8 +496,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         meal: MealType,
         notes: String?,
         estimate: AnalyzedItem?,
+        newLoggedAt: Long? = null,
     ): Boolean =
-        container.repository.updateEntry(id) { entry ->
+        container.repository.updateEntry(id, newLoggedAt = newLoggedAt) { entry ->
             entry.copy(
                 foodName = name,
                 portionText = portion,
@@ -377,9 +518,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun loadStats() {
         viewModelScope.launch {
-            _trend.value = container.repository.trend(14)
-            _summaries.value = container.repository.summaries(14)
+            val trend = container.repository.trend(14)
+            val summaries = container.repository.summaries(14)
+            _trend.value = trend
+            _summaries.value = summaries
             _topFoods.value = container.repository.topFoods(14, 6)
+            _insightSummary.value = buildInsightSummary(
+                target = settings.value.dailyTargetKcal,
+                days = trend.map { DayRow(it.dayKey, it.kcal, it.entries, settings.value.dailyTargetKcal) },
+                healthScore = summaries.map { it.avgHealthScore }.filter { it > 0.0 }
+                    .takeIf { it.isNotEmpty() }?.average() ?: 0.0,
+                localShare = summaries.let { list ->
+                    val total = list.sumOf { it.totalKcal }
+                    if (total == 0) 0.0 else list.sumOf { it.localKcal }.toDouble() / total
+                },
+            )
         }
     }
 
@@ -425,6 +578,144 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _macroProfiles.value = emptyMap()
         loadStats()
         container.sync.sync()
+    }
+
+    // --- Backup and restore -------------------------------------------------
+
+    private val _backupStatus = MutableStateFlow<BackupStatus>(BackupStatus.Idle)
+    val backupStatus: StateFlow<BackupStatus> = _backupStatus.asStateFlow()
+
+    /**
+     * A backup the user picked but has not confirmed yet.
+     *
+     * Held rather than applied straight away so the UI can state how much is about to
+     * be written before anything touches the log. Non-null means the restore
+     * confirmation dialog is open.
+     */
+    private val _pendingRestore = MutableStateFlow<BackupFile?>(null)
+    val pendingRestore: StateFlow<BackupFile?> = _pendingRestore.asStateFlow()
+
+    /** Dismisses the last backup message; the UI calls this once it has been shown. */
+    fun clearBackupStatus() {
+        _backupStatus.value = BackupStatus.Idle
+    }
+
+    private fun backupFailure(reason: Throwable): String = when (reason) {
+        is SecurityException -> "Tidak punya izin menulis ke lokasi itu."
+        else -> reason.message ?: "Terjadi kesalahan."
+    }
+
+    private fun parseFailure(error: BackupError): String = when (error) {
+        BackupError.NotABackup -> "Berkas ini bukan cadangan KaloriKu."
+        is BackupError.UnsupportedVersion ->
+            "Cadangan ini dibuat aplikasi versi yang lebih baru (versi ${error.found}). " +
+                "Perbarui aplikasi untuk memulihkannya."
+        BackupError.Empty -> "Cadangan ini tidak berisi catatan yang bisa dipulihkan."
+    }
+
+    /**
+     * Writes a backup document to the destination the user picked.
+     *
+     * The file is [BackupCodec]-encoded JSON of every row including tombstones, plus the
+     * daily target, so a restore can put the log back exactly as it was. All file access
+     * runs on [Dispatchers.IO] and every failure is reported through [backupStatus]
+     * rather than thrown: a user-chosen `content://` uri can be revoked, unwritable, or
+     * backed by a provider that simply returns a null stream.
+     */
+    fun exportBackup(uri: Uri) {
+        viewModelScope.launch {
+            _backupStatus.value = BackupStatus.Working("Menyimpan cadangan...")
+            try {
+                val file = BackupFile(
+                    entries = container.repository.allForBackup(),
+                    settings = settings.value,
+                    createdAt = System.currentTimeMillis(),
+                    appVersion = BuildConfig.VERSION_NAME,
+                )
+                val bytes = BackupCodec.encode(file).toByteArray(Charsets.UTF_8)
+                withContext(Dispatchers.IO) {
+                    val stream = getApplication<Application>().contentResolver
+                        .openOutputStream(uri)
+                        ?: error("Lokasi tujuan tidak bisa dibuka.")
+                    stream.use { it.write(bytes) }
+                }
+                _backupStatus.value = BackupStatus.Done(
+                    "Cadangan disimpan: ${file.liveEntryCount} catatan.",
+                )
+            } catch (e: Exception) {
+                _backupStatus.value = BackupStatus.Failed(
+                    "Gagal menyimpan cadangan: ${backupFailure(e)}",
+                )
+            }
+        }
+    }
+
+    /**
+     * Reads and validates a picked backup without applying it.
+     *
+     * Parsing is separated from applying so the UI can show the user exactly how many
+     * entries the file carries and get an explicit confirmation first. On success
+     * [pendingRestore] is set and the dialog opens; on any failure nothing is staged.
+     */
+    fun inspectBackup(uri: Uri) {
+        viewModelScope.launch {
+            _backupStatus.value = BackupStatus.Working("Membaca cadangan...")
+            try {
+                val raw = withContext(Dispatchers.IO) {
+                    val stream = getApplication<Application>().contentResolver
+                        .openInputStream(uri)
+                        ?: error("Berkas tidak bisa dibuka.")
+                    stream.use { it.readBytes().toString(Charsets.UTF_8) }
+                }
+                when (val result = BackupCodec.decode(raw)) {
+                    is BackupParseResult.Success -> {
+                        _pendingRestore.value = result.file
+                        _backupStatus.value = BackupStatus.Idle
+                    }
+                    is BackupParseResult.Failure -> {
+                        _backupStatus.value = BackupStatus.Failed(parseFailure(result.error))
+                    }
+                }
+            } catch (e: Exception) {
+                _backupStatus.value = BackupStatus.Failed(
+                    "Gagal membaca cadangan: ${backupFailure(e)}",
+                )
+            }
+        }
+    }
+
+    /**
+     * Applies the staged backup.
+     *
+     * The repository merge is authoritative, so entries with an identity already in the
+     * log are overwritten by the backup copy and new ones are inserted. The daily target
+     * is restored alongside the log, and a sync is pushed so the watch converges to the
+     * restored state instead of keeping the entries this restore just replaced.
+     */
+    fun confirmRestore() {
+        val file = _pendingRestore.value ?: return
+        viewModelScope.launch {
+            _backupStatus.value = BackupStatus.Working("Memulihkan catatan...")
+            try {
+                val written = container.repository.restore(file.entries)
+                container.settingsStore.restore(file.settings)
+                _pendingRestore.value = null
+                loadStats()
+                container.sync.sync()
+                _backupStatus.value = BackupStatus.Done("Dipulihkan: $written catatan.")
+            } catch (e: Exception) {
+                _pendingRestore.value = null
+                _backupStatus.value = BackupStatus.Failed(
+                    "Gagal memulihkan cadangan: ${backupFailure(e)}",
+                )
+            }
+        }
+    }
+
+    /** Dismisses the staged backup without touching the log. */
+    fun cancelRestore() {
+        _pendingRestore.value = null
+        _backupStatus.value = BackupStatus.Idle
     }
 
     /** A few example Indonesian phrases for the empty state. */

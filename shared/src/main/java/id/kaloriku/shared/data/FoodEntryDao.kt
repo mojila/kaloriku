@@ -74,6 +74,14 @@ interface FoodEntryDao {
     suspend fun count(): Int
 
     /**
+     * Every row in the table, tombstones included. Used only by the backup export: a
+     * backup must carry deletions as well, or a restore would resurrect entries the
+     * user had removed once the peer re-syncs its copy.
+     */
+    @Query("SELECT * FROM food_entries ORDER BY loggedAt ASC")
+    suspend fun all(): List<FoodEntryEntity>
+
+    /**
      * Entries changed here that the peer has not confirmed receiving yet. Includes
      * tombstones: a deletion is a change the peer must apply too.
      */

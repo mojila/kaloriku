@@ -1,7 +1,9 @@
 package id.kaloriku.wear.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -9,40 +11,39 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.Image
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.items
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material3.Button
-import androidx.wear.compose.material3.Card
-import androidx.wear.compose.material3.CardDefaults
-import androidx.wear.compose.material3.CircularProgressIndicator
 import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
-import id.kaloriku.wear.WearViewModel
 import id.kaloriku.shared.domain.FoodEntry
 import id.kaloriku.shared.domain.JakartaTime
-import id.kaloriku.shared.sync.SyncStatus
-import java.time.Instant
-import java.time.format.DateTimeFormatter
-import java.util.Locale
+import id.kaloriku.wear.WearViewModel
 
 /**
- * The watch home. Today's total sits at the top; the recent-foods list is the
- * main content and the primary thing the user sees on a glance.
+ * The watch home.
+ *
+ * Reading order is deliberate and matches how the screen is actually used:
+ *   1. the day's calorie total, as the one number worth a glance,
+ *   2. a single primary action to log a meal,
+ *   3. the recent-foods list, which is the content the user came for,
+ *   4. a quiet sync line, demoted so it cannot compete with the total.
+ *
+ * Everything scrolls in a [ScalingLazyColumn] so items curve to the round bezel
+ * instead of being clipped by it.
  */
 @Composable
 fun HomeScreen(
@@ -53,154 +54,131 @@ fun HomeScreen(
     val home by vm.home.collectAsStateWithLifecycle()
     val syncStatus by vm.syncStatus.collectAsStateWithLifecycle()
     val listState = rememberScalingLazyListState()
+    val todayKey = JakartaTime.todayKey()
 
     ScreenScaffold(scrollState = listState) {
         ScalingLazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                horizontal = 12.dp, vertical = 8.dp,
-            ),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            item {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Image(
-                        painter = painterResource(id.kaloriku.wear.R.drawable.ic_logo),
-                        contentDescription = null,
-                        modifier = Modifier.size(28.dp),
-                    )
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = JakartaTime.label(JakartaTime.todayKey()).uppercase(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            text = "${home.todayTotal}",
-                            style = MaterialTheme.typography.displaySmall,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                }
-            }
-
-            item {
-                Text(
-                    text = "dari ${home.target} kkal · sisa ${home.remaining}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
-            }
+            item { DayTotalHeader(todayTotal = home.todayTotal, target = home.target) }
 
             item {
                 Button(
                     onClick = onLogVoice,
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                 ) {
                     Icon(Icons.Filled.Mic, contentDescription = null)
-                    Spacer(Modifier.height(2.dp))
+                    Spacer(Modifier.size(6.dp))
                     Text("Catat suara")
                 }
             }
 
+            // Secondary by design: one muted line, no card, no spinner unless running.
             item {
-                SyncStatusLine(status = syncStatus)
-            }
-
-            item {
-                Text(
-                    text = "MAKANAN TERAKHIR",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(start = 4.dp, top = 8.dp),
+                SyncStatusLine(
+                    running = syncStatus.running,
+                    hasSynced = syncStatus.hasSynced,
+                    message = syncStatus.message,
+                    lastSuccessAt = syncStatus.lastSuccessAt,
+                    modifier = Modifier.padding(horizontal = 8.dp),
                 )
             }
+
+            item { SectionHeader("MAKANAN TERAKHIR") }
 
             if (home.recent.isEmpty()) {
                 item {
                     Text(
-                        text = "Belum ada catatan. Tekan Catat suara untuk mulai.",
+                        text = "Belum ada catatan hari ini.\nTekan Catat suara untuk mulai.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                     )
                 }
             } else {
                 items(home.recent, key = { it.id }) { entry ->
-                    RecentCard(entry = entry, onClick = { onSelect(entry) })
+                    RecentRow(
+                        entry = entry,
+                        todayKey = todayKey,
+                        onClick = { onSelect(entry) },
+                    )
                 }
             }
+
+            // Breathing room so the last row clears the round bezel instead of being
+            // sliced by it.
+            item { Spacer(Modifier.height(24.dp)) }
         }
     }
 }
 
 /**
- * Read-only sync status. Sync is triggered from the phone (the manual button) or
- * automatically on save/foreground, so the watch only reports the last result.
+ * The day's total, as the focal point of the screen.
+ *
+ * Layout: day label / big total / one subline. The total always keeps the primary
+ * accent so the focal number has a stable identity; the subline states the target and
+ * then either what is left or how far over. Over-target is shown with an explicit word
+ * *and* the error colour, so the word alone already carries the meaning — the colour
+ * only reinforces it, which keeps the state readable for colour-blind users and on a
+ * dim always-on display.
  */
 @Composable
-private fun SyncStatusLine(status: SyncStatus) {
-    val message = status.message
-    val hint: String = when {
-        status.running -> "Menyinkronkan..."
-        !message.isNullOrBlank() -> message
-        status.hasSynced -> "Tersinkron ${timeText(status.lastSuccessAt!!)}"
-        else -> "Belum tersinkron"
-    }
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
-    ) {
-        if (status.running) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(14.dp),
-                strokeWidth = 2.dp,
-            )
-            Spacer(Modifier.height(4.dp))
-        }
-        Text(
-            text = hint,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
-    }
-}
+private fun DayTotalHeader(todayTotal: Int, target: Int) {
+    val over = todayTotal > target
+    val remaining = (target - todayTotal).coerceAtLeast(0)
 
-@Composable
-private fun RecentCard(entry: FoodEntry, onClick: () -> Unit) {
-    Card(
-        onClick = onClick,
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-        ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text = entry.foodName,
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Image(
+                painter = painterResource(id = id.kaloriku.wear.R.drawable.ic_logo),
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
             )
-            Spacer(Modifier.height(2.dp))
             Text(
-                text = "${entry.kcal} kkal · ${timeText(entry.loggedAt)}",
-                style = MaterialTheme.typography.bodySmall,
+                text = JakartaTime.label(JakartaTime.todayKey()),
+                style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+
+        // The one number that matters.
+        Text(
+            text = "$todayTotal",
+            style = MaterialTheme.typography.displayMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Text(
+            text = "kkal",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Text(
+            text = if (over) {
+                "dari $target kkal · lewat ${todayTotal - target} kkal"
+            } else {
+                "dari $target kkal · sisa $remaining kkal"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (over) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 4.dp),
+        )
     }
 }
-
-internal fun timeText(epochMillis: Long): String =
-    Instant.ofEpochMilli(epochMillis)
-        .atZone(JakartaTime.zone)
-        .format(DateTimeFormatter.ofPattern("HH:mm", java.util.Locale.forLanguageTag("id-ID")))
