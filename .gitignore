@@ -1,0 +1,16 @@
+*.iml
+.gradle
+.kotlin
+/local.properties
+/.idea
+.DS_Store
+# Every module has its own build/ output (AGP intermediates embed the API key
+# from BuildConfig), so this must match at any depth, not just the repo root.
+build/
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+*.apk
+*.aab
+__pycache__
